@@ -1,0 +1,41 @@
+GitHub 上传命令 - AI Job Application Agent
+
+=========================================
+请在 GitHub 上创建新仓库后，执行以下命令
+=========================================
+
+# 1. 初始化 Git 仓库
+git init
+
+# 2. 添加远程仓库 (请替换 <username> 为您的 GitHub 用户名)
+git remote add origin https://github.com/xing345/ai-job-application-agent.git
+
+# 3. 添加所有文件
+git add .
+
+# 4. 创建第一次提交
+git commit -m "feat: 初始化项目 - AI Job Application Agent
+
+- 实现基于 LangGraph 的求职自动化系统
+- 包含简历解析、职位搜索、自动申请等功能
+- 支持 Human-in-the-Loop 机制
+- 完整的测试和文档"
+
+# 5. 推送到 GitHub
+git branch -M main
+git push -u origin main
+
+# 6. 创建标签 (可选)
+git tag -a v1.0.0 -m "Version 1.0.0 - Initial Release"
+git push origin v1.0.0
+
+=========================================
+
+执行完成后，您的项目就会成功上传到 GitHub！
+仓库名址: https://github.com/xing345/ai-job-application-agent
+
+注意事项:
+1. 确保已经安装了 Git
+2. 确保网络连接正常
+3. 如果有修改，请确保所有文件都已经添加
+4. 提交信息使用英文，符合规范

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>表单测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .submit-btn {
+            background-color: #007bff;
+            margin-top: 20px;
+        }
+        .submit-btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>求职申请表单测试页面</h1>
+
+    <form id="job-application-form">
+        <!-- 基本信息 -->
+        <h2>基本信息</h2>
+        <div class="form-group">
+            <label for="name">姓名 *</label>
+            <input type="text" id="name" name="name" required>
+        </div>
+
+        <div class="form-group">
+            <label for="email">邮箱 *</label>
+            <input type="email" id="email" name="email" required>
+        </div>
+
+        <div class="form-group">
+            <label for="phone">电话</label>
+            <input type="tel" id="phone" name="phone">
+        </div>
+
+        <!-- 工作经历 -->
+        <h2>工作经历</h2>
+        <div class="form-group">
+            <label for="company-0">公司名称</label>
+            <input type="text" id="company-0" name="company-0">
+        </div>
+
+        <div class="form-group">
+            <label for="position-0">职位名称</label>
+            <input type="text" id="position-0" name="position-0">
+        </div>
+
+        <div class="form-group">
+            <label for="start_date-0">开始日期</label>
+            <input type="month" id="start_date-0" name="start_date-0">
+        </div>
+
+        <!-- 教育背景 -->
+        <h2>教育背景</h2>
+        <div class="form-group">
+            <label for="school-0">学校名称</label>
+            <input type="text" id="school-0" name="school-0">
+        </div>
+
+        <div class="form-group">
+            <label for="major-0">专业</label>
+            <input type="text" id="major-0" name="major-0">
+        </div>
+
+        <div class="form-group">
+            <label for="degree-0">学位</label>
+            <select id="degree-0" name="degree-0">
+                <option value="高中">高中</option>
+                <option value="本科" selected>本科</option>
+                <option value="硕士">硕士</option>
+                <option value="博士">博士</option>
+            </select>
+        </div>
+
+        <!-- 项目经验 -->
+        <h2>项目经验</h2>
+        <div class="form-group">
+            <label for="project_name-0">项目名称</label>
+            <input type="text" id="project_name-0" name="project_name-0">
+        </div>
+
+        <div class="form-group">
+            <label for="description-0">项目描述</label>
+            <textarea id="description-0" name="description-0" rows="4"></textarea>
+        </div>
+
+        <!-- 简历上传 -->
+        <h2>简历上传</h2>
+        <div class="form-group">
+            <label for="resume">上传简历（PDF）</label>
+            <input type="file" id="resume" name="resume" accept=".pdf">
+        </div>
+
+        <!-- 提交按钮 -->
+        <button type="submit" class="submit-btn">提交申请</button>
+    </form>
+
+    <div id="result" style="margin-top: 20px; padding: 10px; background-color: #f0f0f0; display: none;">
+        <h3>表单已提交成功！</h3>
+        <p id="result-content"></p>
+    </div>
+
+    <script>
+        document.getElementById('job-application-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            // 收集表单数据
+            const formData = new FormData(this);
+            const result = {};
+
+            // 基本信息收集
+            result.name = formData.get('name');
+            result.email = formData.get('email');
+            result.phone = formData.get('phone');
+
+            // 显示结果
+            const resultDiv = document.getElementById('result');
+            const resultContent = document.getElementById('result-content');
+
+            resultContent.innerHTML = `
+                <strong>姓名：</strong> ${result.name}<br>
+                <strong>邮箱：</strong> ${result.email}<br>
+                <strong>电话：</strong> ${result.phone || '未填写'}
+            `;
+
+            resultDiv.style.display = 'block';
+
+            // 打印到控制台
+            console.log('表单数据：', result);
+        });
+    </script>
+</body>
+</html>
