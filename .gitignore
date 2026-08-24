@@ -66,6 +66,13 @@ temp_files/
 .env.staging
 config/secrets.json
 
+# 本地配置文件（含真实 API key，禁止提交到 Git）
+config.json
+
+# 运行数据（数据库、用户画像含个人简历信息）
+data/
+src/data/
+
 # Cache
 .cache/
 __pycache__/
