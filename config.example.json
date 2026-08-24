@@ -1,0 +1,46 @@
+{
+  "tavily_api_key": "",
+  "search": {
+    "interval_hours": 24,
+    "max_results_per_search": 50,
+    "sources": [
+      "linkedin",
+      "bosszhipin",
+      "indeed"
+    ]
+  },
+  "matching": {
+    "threshold_score": 70,
+    "auto_apply": false,
+    "dry_run": false
+  },
+  "browser": {
+    "headless": true,
+    "timeout": 30000,
+    "max_retries": 3
+  },
+  "reflection": {
+    "enabled": true,
+    "learning_mode": "active"
+  },
+  "email": {
+    "enabled": true,
+    "check_interval_minutes": 300,
+    "server": "imap.gmail.com",
+    "username": "",
+    "password": ""
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "temperature": 0.7,
+    "max_tokens": 2000
+  },
+  "paths": {
+    "resume": "data/resume.pdf",
+    "output": "data/output/",
+    "logs": "logs/"
+  }
+}
