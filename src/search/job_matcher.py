@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import re
 from typing import List, Optional
 from playwright.async_api import async_playwright
@@ -34,9 +35,26 @@ class MatchResultSchema(BaseModel):
 
 class JobMatcherConfig:
     """匹配器配置"""
-    def __init__(self):
-        self.openai_api_key = "your_openai_api_key_here"
-        self.llm_client = OpenAI(api_key=self.openai_api_key)
+    def __init__(self, openai_api_key: str = None, base_url: str = None, model: str = None):
+        # 未显式传入时从 config.json 的 llm 段读取（环境变量兜底）
+        llm_cfg = {}
+        try:
+            config_path = os.path.join(project_root, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    llm_cfg = json.load(f).get("llm", {}) or {}
+        except Exception:
+            pass
+
+        self.openai_api_key = (
+            openai_api_key or llm_cfg.get("api_key") or os.getenv("OPENAI_API_KEY") or ""
+        )
+        self.base_url = base_url or llm_cfg.get("base_url") or os.getenv("OPENAI_BASE_URL") or None
+        self.model = model or llm_cfg.get("model") or os.getenv("OPENAI_MODEL") or "gpt-4o"
+        self.llm_client = (
+            OpenAI(api_key=self.openai_api_key, base_url=self.base_url)
+            if self.openai_api_key else None
+        )
         self.playwright_timeout = 30
         self.retry_attempts = 3
 
@@ -220,8 +238,10 @@ class JobMatcher:
     async def _llm_evaluate(self, prompt: str) -> str:
         """使用 LLM 进行评估"""
         try:
+            if not self.config.llm_client:
+                return "{'error': '未配置 OPENAI_API_KEY，无法进行 LLM 匹配评估'}"
             response = await self.config.llm_client.chat.completions.create(
-                model="gpt-4o",
+                model=self.config.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1000

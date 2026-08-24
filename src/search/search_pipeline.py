@@ -55,10 +55,18 @@ class SearchResult:
 class SearchPipeline:
     """搜索管道"""
 
-    def __init__(self, tavily_api_key: str, openai_api_key: str):
+    def __init__(
+        self,
+        tavily_api_key: str,
+        openai_api_key: str,
+        base_url: str = None,
+        model: str = None
+    ):
         # 初始化组件
         self.job_finder = JobFinder(JobFinderConfig(api_key=tavily_api_key))
-        self.job_matcher = JobMatcher(JobMatcherConfig())
+        self.job_matcher = JobMatcher(
+            JobMatcherConfig(openai_api_key=openai_api_key, base_url=base_url, model=model)
+        )
 
         # 配置日志
         logger.add("search_pipeline.log", rotation="10 MB")

@@ -25,7 +25,8 @@ from src.utils.llm_client import LLMClient
 class DynamicUserPersonaGenerator:
     """动态用户画像生成器"""
 
-    def __init__(self, model: str = "gpt-4"):
+    def __init__(self, model: str = None):
+        # model 不传时由 LLMClient 从 config.json / 环境变量兜底
         self.llm_client = LLMClient(model=model)
         self.prompt_templates = self._load_prompt_templates()
 
@@ -202,6 +203,7 @@ class DynamicUserPersonaGenerator:
     "learning_style": [...],
     "cultural_fit": [...]
 }
+        """,
         }
 
     async def generate_persona(
@@ -296,7 +298,7 @@ class DynamicUserPersonaGenerator:
             domain_knowledge=validated_persona.get("domain_knowledge", {}),
             career_objective=CareerObjective(**validated_persona.get("career_objective", {})),
             personality_traits=PersonalityTraits(**validated_persona.get("personality_traits", {})),
-            constraints=CareerConstraints(**validatedPersona.get("constraints", {})),
+            constraints=CareerConstraints(**validated_persona.get("constraints", {})),
             work_preferences=validated_persona.get("work_preferences", {}),
             motivators=validated_persona.get("motivators", []),
             deal_breakers=validated_persona.get("deal_breakers", []),

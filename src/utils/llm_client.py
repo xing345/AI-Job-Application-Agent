@@ -6,6 +6,7 @@ LLM客户端工具
 import os
 import json
 import asyncio
+from pathlib import Path
 from typing import Dict, List, Optional, Any, AsyncGenerator
 from datetime import datetime
 from loguru import logger
@@ -20,43 +21,76 @@ except ImportError:
     pass
 
 
+# 项目根目录下的 config.json（供惰性加载 LLM 配置）
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_CONFIG_PATH = _PROJECT_ROOT / "config.json"
+_LLM_CONFIG_CACHE: Optional[Dict] = None
+
+
+def _load_llm_config() -> Dict:
+    """从 config.json 读取 llm 段配置（惰性加载，失败返回空字典）"""
+    global _LLM_CONFIG_CACHE
+    if _LLM_CONFIG_CACHE is None:
+        _LLM_CONFIG_CACHE = {}
+        try:
+            if _CONFIG_PATH.exists():
+                with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    _LLM_CONFIG_CACHE = json.load(f).get("llm", {}) or {}
+        except Exception as e:
+            logger.warning(f"读取 config.json 失败: {e}")
+    return _LLM_CONFIG_CACHE
+
+
 class LLMClient:
     """LLM客户端封装"""
 
     def __init__(
         self,
-        model: str = "gpt-4-turbo-preview",
+        model: str = None,
         api_key: str = None,
         base_url: str = None,
-        temperature: float = 0.7,
-        max_tokens: int = 4000,
+        temperature: float = None,
+        max_tokens: int = None,
         timeout: int = 30
     ):
         """
         初始化LLM客户端
 
+        未显式传入的参数会依次从 config.json 的 llm 段、环境变量读取。
+
         Args:
             model: 使用的模型名称
-            api_key: OpenAI API密钥
-            base_url: 自定义API基础URL
+            api_key: API密钥
+            base_url: 自定义API基础URL（如 DeepSeek: https://api.deepseek.com）
             temperature: 生成温度
             max_tokens: 最大生成长度
             timeout: 请求超时时间
         """
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        llm_cfg = _load_llm_config()
+
+        self.model = model or llm_cfg.get("model") or os.getenv("OPENAI_MODEL") or "gpt-4-turbo-preview"
+        self.temperature = temperature if temperature is not None else float(llm_cfg.get("temperature", 0.7))
+        self.max_tokens = max_tokens if max_tokens is not None else int(llm_cfg.get("max_tokens", 4000))
         self.timeout = timeout
 
-        # 初始化OpenAI客户端
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("未提供OpenAI API密钥")
+        # 惰性初始化 OpenAI 客户端（避免无 API key 时构造即崩溃）
+        self._api_key = api_key or llm_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
+        self._base_url = base_url or llm_cfg.get("base_url") or os.getenv("OPENAI_BASE_URL")
+        self._client = None
 
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url or os.getenv("OPENAI_BASE_URL")
-        )
+    def _get_client(self) -> AsyncOpenAI:
+        """按需创建 OpenAI 客户端"""
+        if self._client is None:
+            if not self._api_key:
+                raise ValueError(
+                    "未提供OpenAI API密钥，请在 .env 中配置 OPENAI_API_KEY "
+                    "或在 config.json 的 llm.api_key 中配置"
+                )
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url
+            )
+        return self._client
 
     async def generate_response(
         self,
@@ -112,7 +146,7 @@ class LLMClient:
 
             # 发送请求
             logger.info(f"调用LLM: {self.model}")
-            response = await self.client.chat.completions.create(**kwargs)
+            response = await self._get_client().chat.completions.create(**kwargs)
 
             # 处理响应
             content = response.choices[0].message.content
@@ -211,7 +245,7 @@ class LLMClient:
 
             # 发送流式请求
             logger.info(f"开始流式生成: {self.model}")
-            stream = await self.client.chat.completions.create(**kwargs)
+            stream = await self._get_client().chat.completions.create(**kwargs)
 
             # 处理流式响应
             for chunk in stream:
