@@ -11,8 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from loguru import logger
 
-from browser_use.browser_service import BrowserService
-from browser_use.browser import Browser
+from playwright.async_api import async_playwright
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -46,7 +45,8 @@ class BrowserAgent:
         self,
         headless: bool = False,
         viewport: tuple = (1280, 720),
-        user_agent: str = None
+        user_agent: str = None,
+        timeout: int = 30000
     ):
         """
         初始化浏览器Agent
@@ -55,24 +55,42 @@ class BrowserAgent:
             headless: 是否无头模式
             viewport: 视口大小
             user_agent: 用户代理字符串
+            timeout: 页面操作超时时间（毫秒）
         """
         self.headless = headless
         self.viewport = viewport
         self.user_agent = user_agent
+        self.timeout = timeout
         self.browser = None
+        self.context = None
+        self.page = None
+        self._playwright = None
         self.llm_client = get_llm_client()
         self.state = BrowserState()
 
     async def start_browser(self):
-        """启动浏览器"""
+        """启动浏览器（基于 Playwright）"""
         try:
             logger.info("启动浏览器...")
-            browser_service = BrowserService(
+            self._playwright = await async_playwright().start()
+
+            launch_args = []
+            if self.user_agent:
+                launch_args.append(f"--user-agent={self.user_agent}")
+
+            self.browser = await self._playwright.chromium.launch(
                 headless=self.headless,
-                viewport=self.viewport,
-                user_agent=self.user_agent
+                args=launch_args
             )
-            self.browser = await browser_service.launch()
+            self.context = await self.browser.new_context(
+                viewport={
+                    "width": self.viewport[0] if isinstance(self.viewport, tuple) else 1280,
+                    "height": self.viewport[1] if isinstance(self.viewport, tuple) else 720
+                },
+                user_agent=self.user_agent or None
+            )
+            self.page = await self.context.new_page()
+            self.page.set_default_timeout(self.timeout)
             logger.info("浏览器启动成功")
         except Exception as e:
             logger.error(f"浏览器启动失败: {e}")
@@ -81,18 +99,41 @@ class BrowserAgent:
     async def stop_browser(self):
         """停止浏览器"""
         if self.browser:
-            await self.browser.close()
-            logger.info("浏览器已停止")
+            try:
+                await self.browser.close()
+            except Exception as e:
+                logger.warning(f"关闭浏览器时出错: {e}")
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        logger.info("浏览器已停止")
+
+    async def get_page_content(self) -> str:
+        """获取当前页面内容"""
+        if not self.page:
+            return ""
+        try:
+            return await self.page.content()
+        except Exception as e:
+            logger.warning(f"获取页面内容失败: {e}")
+            return ""
 
     async def navigate_to(self, url: str) -> bool:
         """导航到指定URL"""
         try:
             logger.info(f"导航到: {url}")
-            await self.browser.goto(url)
-            self.state.url = url
+            if not self.page:
+                logger.error("浏览器未启动，请先调用 start_browser()")
+                self.state.error = "浏览器未启动"
+                return False
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+            self.state.url = self.page.url or url
 
             # 获取页面内容
-            content = await self.browser.get_page_content()
+            content = await self.get_page_content()
             self.state.content = content
 
             logger.info("页面加载完成")
@@ -160,7 +201,7 @@ class BrowserAgent:
 
     async def find_career_page(self, company_url: str) -> Optional[str]:
         """
-        在公司网站上查找招聘页面
+        在公司网站上查找招聘页面 - 支持完全未知的官网结构
 
         Args:
             company_url: 公司网站URL
@@ -175,37 +216,220 @@ class BrowserAgent:
             if not await self.navigate_to(company_url):
                 return None
 
-            # 获取页面内容
-            content = await self.browser.get_page_content()
+            # 尝试多种策略查找招聘页面
+            strategies = [
+                await self._find_career_by_content_analysis(),
+                await self._find_career_by_navigation_clicking(),
+                await self._find_career_by_advanced_crawler()
+            ]
 
-            # 使用LLM分析页面内容
+            # 返回第一个成功的策略结果
+            for strategy_result in strategies:
+                if strategy_result:
+                    logger.info(f"通过策略找到招聘页面: {strategy_result}")
+                    return strategy_result
+
+            logger.warning("所有策略都未找到招聘页面")
+            return None
+
+        except Exception as e:
+            logger.error(f"查找招聘页面失败: {e}")
+            return None
+
+    async def _find_career_by_content_analysis(self) -> Optional[str]:
+        """通过内容分析查找招聘页面"""
+        try:
+            content = await self.get_page_content()
+
+            # 分析页面内容
             prompt = f"""
             分析当前页面内容，查找招聘/工作/职位相关的链接。
 
             页面内容：
-            {content[:2000]}
+            {content[:3000]}
 
-            请识别并返回招聘相关的链接URL。如果有多个链接，请列出所有找到的招聘页面URL。
-            如果没有找到招聘页面，请返回 "no_career_page"。
+            请识别并返回招聘相关的链接URL。如果有多个链接，请返回最相关的招聘页面URL。
+            如果没有找到招聘页面，请返回 "not_found"。
 
             输出格式：
             {{
-                "career_pages": ["url1", "url2"],
-                "keywords_found": ["招聘", "工作", "职位", "careers", "jobs", "career"]
+                "best_career_page": "url",
+                "all_career_pages": ["url1", "url2"],
+                "keywords_found": ["招聘", "工作", "职位", "careers", "jobs", "career", "join", "talent"]
             }}
             """
 
             response = await self.llm_client.generate_response(prompt, json_output=True)
 
-            if response.get("career_pages"):
-                return response["career_pages"][0]  # 返回第一个找到的招聘页面
-            else:
-                logger.warning("未找到招聘页面")
-                return None
+            if response.get("best_career_page") and response["best_career_page"] != "not_found":
+                return response["best_career_page"]
+
+            return None
 
         except Exception as e:
-            logger.error(f"查找招聘页面失败: {e}")
+            logger.error(f"内容分析策略失败: {e}")
             return None
+
+    async def _find_career_by_navigation_clicking(self) -> Optional[str]:
+        """通过智能导航点击查找招聘页面"""
+        try:
+            # 获取页面上的所有链接
+            from playwright.async_api import Page
+
+            # 获取页面元素
+            page = self.page
+            if not page:
+                return None
+
+            # 等待页面加载
+            await page.wait_for_load_state("networkidle")
+
+            # 获取所有可点击的元素
+            links = await page.query_selector_all('a, button, [role="link"], [role="button"]')
+
+            # 候选链接列表
+            candidate_links = []
+
+            for link in links[:50]:  # 限制数量避免过多点击
+                try:
+                    # 获取链接文本
+                    text = await link.text_content() or ""
+                    text = text.strip()
+
+                    # 获取链接href
+                    href = await link.get_attribute('href') or ""
+                    href = href.strip()
+
+                    # 检查是否是招聘相关链接
+                    if self._is_recruitment_link(text, href):
+                        candidate_links.append({
+                            'element': link,
+                            'text': text,
+                            'href': href,
+                            'score': self._calculate_recruitment_score(text, href)
+                        })
+
+                except Exception:
+                    continue
+
+            # 按分数排序，优先点击分数高的
+            candidate_links.sort(key=lambda x: x['score'], reverse=True)
+
+            # 尝试点击前3个候选链接
+            for candidate in candidate_links[:3]:
+                try:
+                    logger.info(f"尝试点击: {candidate['text']} ({candidate['href']})")
+                    await candidate['element'].click(timeout=5000)
+
+                    # 等待新页面加载
+                    await asyncio.sleep(2)
+
+                    # 检查新页面是否是招聘页面
+                    new_content = await page.content()
+                    if self._is_career_page_content(new_content):
+                        current_url = page.url
+                        logger.info(f"找到招聘页面: {current_url}")
+                        return current_url
+
+                    # 返回原页面
+                    await page.go_back()
+                    await page.wait_for_load_state("networkidle")
+
+                except Exception as e:
+                    logger.warning(f"点击失败: {e}")
+                    continue
+
+            return None
+
+        except Exception as e:
+            logger.error(f"导航点击策略失败: {e}")
+            return None
+
+    async def _find_career_by_advanced_crawler(self) -> Optional[str]:
+        """使用高级爬虫策略查找招聘页面"""
+        try:
+            from .advanced_crawler import AdvancedCrawler
+
+            # 创建高级爬虫实例
+            crawler = AdvancedCrawler()
+            await crawler.start_browser()
+
+            # 使用主页面开始爬取
+            current_url = self.page.url if self.page else self.state.url
+
+            # 执行智能爬取
+            result = await crawler.crawl_unknown_website(current_url)
+
+            await crawler.stop_browser()
+
+            if result.success and result.job_listings:
+                logger.info(f"通过高级爬虫找到 {len(result.job_listings)} 个职位")
+                return result.url
+
+            return None
+
+        except Exception as e:
+            logger.error(f"高级爬虫策略失败: {e}")
+            return None
+
+    def _is_recruitment_link(self, text: str, href: str) -> bool:
+        """判断链接是否与招聘相关"""
+        text_lower = text.lower()
+        href_lower = href.lower()
+
+        # 招聘关键词
+        keywords = [
+            "招聘", "招贤纳士", "加入我们", "人才", "职业", "工作", "工作机会",
+            "careers", "join us", "work at", "jobs", "hiring", "talent",
+            "recruitment", "vacancies", "jobs", "employment", "career"
+        ]
+
+        return any(keyword in text_lower or keyword in href_lower for keyword in keywords)
+
+    def _calculate_recruitment_score(self, text: str, href: str) -> float:
+        """计算招聘链接的相关性分数"""
+        score = 0.0
+        text_lower = text.lower()
+        href_lower = href.lower()
+
+        # 高度相关的词
+        high_priority = ["careers", "join us", "加入我们", "招聘", "jobs"]
+        for word in high_priority:
+            if word in text_lower or word in href_lower:
+                score += 10.0
+
+        # 中等相关词
+        medium_priority = ["work", "talent", "职业", "人才", "hiring"]
+        for word in medium_priority:
+            if word in text_lower or word in href_lower:
+                score += 5.0
+
+        # URL中的特殊路径
+        if any(path in href_lower for path in ['/careers/', '/jobs/', '/join/', '/career/', '/hiring/']):
+            score += 8.0
+
+        # 文本长度奖励（太短的文本可能是广告）
+        if len(text) > 5:
+            score += 1.0
+
+        return score
+
+    def _is_career_page_content(self, content: str) -> bool:
+        """判断页面内容是否是招聘页面"""
+        content_lower = content.lower()
+
+        # 招聘页面的特征词
+        career_indicators = [
+            "职位", "工作", "招聘", "申请", "职位描述", "工作职责", "任职要求",
+            "careers", "jobs", "careers", "apply", "job description", "responsibilities",
+            "requirements", "position", "vacancy", "employment"
+        ]
+
+        # 统计匹配的指示词数量
+        matches = sum(1 for indicator in career_indicators if indicator in content_lower)
+
+        # 如果匹配超过5个关键词，认为是招聘页面
+        return matches > 5
 
     async def extract_job_listings(self, career_page_url: str) -> List[Dict]:
         """
@@ -228,7 +452,7 @@ class BrowserAgent:
             await asyncio.sleep(2)
 
             # 获取页面内容
-            content = await self.browser.get_page_content()
+            content = await self.get_page_content()
 
             # 使用LLM分析页面内容，提取职位信息
             prompt = f"""

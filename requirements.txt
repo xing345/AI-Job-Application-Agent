@@ -11,7 +11,6 @@ tiktoken>=0.5.0
 
 # Web automation
 playwright>=1.40.0
-playwright-browser>=1.40.0
 browser-use>=0.1.0
 
 # HTTP requests
@@ -47,6 +46,11 @@ click>=8.1.0
 rich>=13.6.0
 tqdm>=4.66.0
 
+# Dashboard
+streamlit>=1.28.0
+pandas>=2.1.0
+plotly>=5.17.0
+
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0
@@ -63,4 +67,3 @@ opencv-python>=4.8.0
 
 # Optional - Database
 sqlalchemy>=2.0.0
-sqlite3  # Built-in with Python
