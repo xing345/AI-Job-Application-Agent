@@ -73,8 +73,8 @@ async def test_mock_data():
 
     from src.parsers.resume_parser import parse_pdf
 
-    # 解析模拟简历
-    resume = await parse_pdf("mock.pdf")
+    # 解析模拟简历（mock 模式，路径仅作存在性检查）
+    resume = await parse_pdf("resumes/test_resume.pdf")
 
     if resume:
         print("✅ 简历解析成功")
@@ -83,7 +83,7 @@ async def test_mock_data():
         print(f"   邮箱: {resume.email}")
         print(f"   技能数量: {len(resume.skills)}")
         print(f"   工作经历: {len(resume.work_experience)}")
-        print(f"   项目经验: {len(resume.project_experience)}")
+        print(f"   项目经验: {len(resume.projects)}")
     else:
         print("❌ 简历解析失败")
 

@@ -26,6 +26,7 @@ from src.orchestrator.state import (
     create_initial_state,
     update_state,
     add_log,
+    add_error,
     get_progress_message,
     state_validator
 )
@@ -112,7 +113,7 @@ async def parse_resume_node(state: AgentState) -> AgentState:
         电话: {parsed_resume.phone}
         邮箱: {parsed_resume.email}
         工作经验: {len(parsed_resume.work_experience)} 年
-        项目经验: {len(parsed_resume.project_experience)} 个
+        项目经验: {len(parsed_resume.projects)} 个
         """
         state = add_log(state, f"简历信息: {summary}")
 
@@ -134,35 +135,58 @@ async def search_jobs_node(state: AgentState) -> AgentState:
     state = add_log(state, "开始搜索匹配的职位")
 
     try:
-        # 创建搜索管道
-        search_pipeline = SearchPipeline()
+        # 从 config.json 读取 API 配置（环境变量兜底）
+        config_data = {}
+        config_path = os.path.join(project_root, "config.json")
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
 
-        # 执行搜索
-        search_results = await search_pipeline.run_full_pipeline(
-            resume_data=state["parsed_resume"],
-            instruction=state["target_instruction"]
+        llm_cfg = config_data.get("llm", {}) or {}
+        search_pipeline = SearchPipeline(
+            config_data.get("tavily_api_key") or os.getenv("TAVILY_API_KEY", ""),
+            llm_cfg.get("api_key") or os.getenv("OPENAI_API_KEY", ""),
+            base_url=llm_cfg.get("base_url") or os.getenv("OPENAI_BASE_URL"),
+            model=llm_cfg.get("model") or os.getenv("OPENAI_MODEL"),
         )
 
-        if not search_results.get("qualified_urls"):
+        # 执行搜索（run_search_pipeline 内部已按分数 >=60 筛选并排序）
+        search_results = await search_pipeline.run_search_pipeline(
+            target_info=state["target_instruction"],
+            resume=state["parsed_resume"]
+        )
+
+        qualified_urls = [r.url for r in search_results]
+        match_results = [
+            {
+                "url": r.url,
+                "title": r.title,
+                "company": state["target_instruction"].company or "未知公司",
+                "match_score": r.match_result.score,
+            }
+            for r in search_results
+        ]
+
+        if not qualified_urls:
             state = add_error(state, "未找到符合条件的职位")
             return update_state(state, status=AgentStatus.FAILED, progress=0.0)
 
         # 更新状态
         state = update_state(
             state,
-            qualified_urls=search_results["qualified_urls"],
-            match_results=search_results.get("match_results", []),
+            qualified_urls=qualified_urls,
+            match_results=match_results,
             progress=50.0
         )
 
         state = add_log(
             state,
-            f"搜索完成，找到 {len(search_results['qualified_urls'])} 个符合条件的职位"
+            f"搜索完成，找到 {len(qualified_urls)} 个符合条件的职位"
         )
 
         # 记录前5个职位信息
-        for i, url in enumerate(search_results["qualified_urls"][:5], 1):
-            match = next((m for m in search_results.get("match_results", []) if m["url"] == url), None)
+        for i, url in enumerate(qualified_urls[:5], 1):
+            match = next((m for m in match_results if m["url"] == url), None)
             if match:
                 state = add_log(state, f"职位 {i}: {match['title']} - {match['company']} (匹配度: {match['match_score']}%)")
 
@@ -316,7 +340,7 @@ async def approval_node(state: AgentState) -> AgentState:
     print(f"\n🔍 需要审批的事项:")
     print(f"   职位申请: {state.get('current_url', '未知')}")
     print(f"   申请人: {state['parsed_resume'].name if state.get('parsed_resume') else '未知'}")
-    print(f"   目标职位: {state['target_instruction'].job_title}")
+    print(f"   目标职位: {state['target_instruction'].role}")
 
     # 模拟审批
     approval_input = input("是否批准继续申请？(y/n): ").strip().lower()
@@ -515,7 +539,7 @@ class ApplicationOrchestrator:
             print(f"\n📝 最近日志:")
             for log in state['logs'][-3:]:
                 timestamp = log.created_at.strftime('%H:%M:%S')
-                print(f"   [{timestamp}] {log.message}")
+                print(f"   [{timestamp}] {log.job_id} - {log.status}")
 
 
 # 测试函数
@@ -527,11 +551,9 @@ async def test_graph_flow():
 
     # 创建测试数据
     instruction = TargetInstructionSchema(
-        job_title="前端开发工程师",
-        company_names=["字节跳动", "腾讯", "阿里巴巴"],
+        company="字节跳动",
+        role="前端开发工程师",
         location="北京",
-        salary_range="15-25K",
-        experience="3-5年",
         keywords=["React", "Vue", "JavaScript", "TypeScript"],
         exclude_keywords=["管理", "销售", "市场"]
     )

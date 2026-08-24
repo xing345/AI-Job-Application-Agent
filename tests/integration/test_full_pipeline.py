@@ -14,7 +14,7 @@ from typing import List, Dict, Any
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
-from src.main import ApplicationOrchestrator
+from src.orchestrator.graph import ApplicationOrchestrator
 from src.orchestrator.state import AgentStatus, print_state_summary
 from src.models.instruction_schemas import TargetInstructionSchema
 

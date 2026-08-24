@@ -12,7 +12,9 @@ import re
 import json
 
 # Pydantic for data validation
-from src.models.schemas import ResumeSchema, WorkExperience, Education, ProjectExperience
+from src.models.schemas import (
+    ResumeSchema, WorkExperience, Education, ProjectExperience, EducationLevel,
+)
 
 class MockPDFParser:
     """模拟 PDF 解析器（用于测试）"""
@@ -119,10 +121,10 @@ class ResumeParser:
             "name": self._extract_name(text),
             "phone": self._extract_phone(text),
             "email": self._extract_email(text),
-            "career_objective": self._extract_career_objective(text),
+            "summary": self._extract_career_objective(text),
             "work_experience": self._extract_work_experience(text),
             "education": self._extract_education(text),
-            "project_experience": self._extract_project_experience(text),
+            "projects": self._extract_project_experience(text),
             "skills": self._extract_skills(text)
         }
 
@@ -200,7 +202,7 @@ class ResumeParser:
 
             if company and position:
                 work_experiences.append({
-                    "company_name": company,
+                    "company": company,
                     "position": position,
                     "start_date": self._parse_date(time_period),
                     "end_date": self._parse_date(time_period, is_end=True),
@@ -218,23 +220,30 @@ class ResumeParser:
         if not education_section:
             return []
 
-        # 提取教育信息
-        pattern = r'([^\n]+)\s*[-—]\s*([^\n]+)\s*\(([^)]+)\)\s*\n([\s\S]*?)(?=\n\n|\n[A-Z一-龥]|$)'
+        # 提取教育信息（末尾条目可能没有换行）
+        pattern = r'([^\n]+)\s*\(([^)]+)\)'
 
         matches = re.finditer(pattern, education_section)
 
         for match in matches:
-            school = match.group(1).strip()
-            degree = match.group(2).strip()
-            time_period = match.group(3).strip()
-            major = match.group(4).strip()
+            pre_paren = match.group(1).strip()
+            time_period = match.group(2).strip()
+
+            # 按 " - " 拆分：学校 - 专业 - 学位 或 学校 - 学位
+            parts = [p.strip() for p in re.split(r'[-—]', pre_paren) if p.strip()]
+            if not parts:
+                continue
+            school = parts[0]
+            degree = parts[-1] if len(parts) >= 2 else "其他"
+            major = parts[1] if len(parts) >= 3 else ""
 
             if school and degree:
                 educations.append({
-                    "school_name": school,
+                    "school": school,
                     "degree": degree,
                     "major": major,
-                    "graduation_date": self._parse_date(time_period, is_end=True),
+                    "start_date": self._parse_date(time_period),
+                    "end_date": self._parse_date(time_period, is_end=True),
                     "description": ""
                 })
 
@@ -249,8 +258,8 @@ class ResumeParser:
         if not project_section:
             return []
 
-        # 提取项目信息
-        pattern = r'([^：:]+)[：:]\s*([^\n]+)\s*\n([\s\S]*?)(?=\n\n|\n[A-Z一-龥]|$)'
+        # 提取项目信息（项目名不跨行）
+        pattern = r'([^：:\n]+)[：:]\s*([^\n]+)\s*\n([\s\S]*?)(?=\n\n|\n[A-Z一-龥]|$)'
 
         matches = re.finditer(pattern, project_section)
 
@@ -262,9 +271,11 @@ class ResumeParser:
             if project_name:
                 technologies = self._extract_technologies(tech_desc)
                 projects.append({
-                    "project_name": project_name,
+                    "name": project_name,
                     "description": description[:500],
-                    "technologies": technologies
+                    "technologies": technologies,
+                    "role": "团队成员",  # 默认角色（schema 必填）
+                    "duration": "未注明"  # 默认时长（schema 必填）
                 })
 
         return projects
@@ -278,19 +289,16 @@ class ResumeParser:
         if not skills_section:
             return []
 
-        # 提取技能关键词
-        # 假设技能用逗号或空格分隔
-        skill_pattern = r'[A-Za-z一-龥]+[\s,]*[A-Za-z一-龥]*'
-        skills = re.findall(skill_pattern, skills_section)
+        # 去掉开头的标题（如 "技能：" 或 "技能"）
+        content = re.sub(r'^[^,，、\n：:]*[：:]?', '', skills_section)
 
-        # 去重和清理
-        cleaned_skills = []
-        for skill in skills:
-            skill = skill.strip().replace(',', '')
-            if skill and len(skill) > 1 and skill not in cleaned_skills:
-                cleaned_skills.append(skill)
+        # 按逗号/顿号/空白分隔技能
+        for skill in re.split(r'[,，、\s]+', content):
+            skill = skill.strip()
+            if skill and len(skill) > 1 and skill not in skills:
+                skills.append(skill)
 
-        return cleaned_skills[:50]  # 限制技能数量
+        return skills[:50]  # 限制技能数量
 
     def _extract_technologies(self, text: str) -> List[str]:
         """提取技术栈"""
@@ -315,14 +323,16 @@ class ResumeParser:
     def _find_section(self, text: str, *section_names: str) -> Optional[str]:
         """查找简历中的特定部分"""
         for name in section_names:
-            pattern = f'{name}[：:][\\s]*([^\\n]*)'
-            match = re.search(pattern, text)
-            if match:
-                section_start = match.start()
-                # 查找下一个部分或文档结束
-                next_section = text.find('\n\n', section_start)
-                section_end = next_section if next_section != -1 else len(text)
-                return text[section_start:section_end]
+            # 优先匹配 "名称：内容" 形式，其次匹配独占一行的标题（如 "工作经历" 无冒号）
+            for sep in ('[：:]', ''):
+                pattern = f'{name}{sep}[\\s]*([^\\n]*)'
+                match = re.search(pattern, text)
+                if match:
+                    section_start = match.start()
+                    # 查找下一个部分或文档结束
+                    next_section = text.find('\n\n', section_start)
+                    section_end = next_section if next_section != -1 else len(text)
+                    return text[section_start:section_end]
 
         return None
 
@@ -353,31 +363,38 @@ class ResumeParser:
         work_experiences = []
         for work in data.get("work_experience", []):
             work_experiences.append(WorkExperience(
-                company_name=work.get("company_name", ""),
+                company=work.get("company", ""),
                 position=work.get("position", ""),
                 start_date=work.get("start_date", ""),
                 end_date=work.get("end_date", ""),
                 description=work.get("description", "")
             ))
 
-        # 转换教育经历
+        # 转换教育经历（degree 必须是 EducationLevel 枚举值，非法值兜底为"其他"）
+        valid_degrees = {level.value for level in EducationLevel}
         educations = []
         for edu in data.get("education", []):
+            degree = edu.get("degree", "")
+            if degree not in valid_degrees:
+                degree = "其他"
             educations.append(Education(
-                school_name=edu.get("school_name", ""),
-                degree=edu.get("degree", ""),
+                school=edu.get("school", ""),
+                degree=degree,
                 major=edu.get("major", ""),
-                graduation_date=edu.get("graduation_date", ""),
+                start_date=edu.get("start_date", ""),
+                end_date=edu.get("end_date", ""),
                 description=edu.get("description", "")
             ))
 
         # 转换项目经历
         projects = []
-        for proj in data.get("project_experience", []):
+        for proj in data.get("projects", []):
             projects.append(ProjectExperience(
-                project_name=proj.get("project_name", ""),
+                name=proj.get("name", ""),
                 description=proj.get("description", ""),
-                technologies=proj.get("technologies", [])
+                technologies=proj.get("technologies", []),
+                role=proj.get("role", "团队成员"),
+                duration=proj.get("duration", "未注明")
             ))
 
         # 创建简历对象
@@ -385,11 +402,11 @@ class ResumeParser:
             name=data.get("name", "未知"),
             phone=data.get("phone", ""),
             email=data.get("email", ""),
-            career_objective=data.get("career_objective", ""),
+            summary=data.get("summary", ""),
+            skills=data.get("skills", []),
             work_experience=work_experiences,
             education=educations,
-            project_experience=projects,
-            skills=data.get("skills", [])
+            projects=projects
         )
 
 

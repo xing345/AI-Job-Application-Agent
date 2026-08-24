@@ -20,7 +20,6 @@ sys.path.insert(0, project_root)
 
 from src.utils.llm_client import get_llm_client
 from src.models.schemas import DynamicUserPersona, MatchAnalysisResult
-from src.browser.browser_agent import BrowserAgent
 
 
 @dataclass

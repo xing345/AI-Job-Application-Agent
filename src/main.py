@@ -60,16 +60,13 @@ def validate_inputs(pdf_path: str, job_title: str) -> tuple[bool, str]:
 
 def create_target_instruction(args) -> TargetInstructionSchema:
     """创建目标指令"""
+    companies = args.companies.split(",") if args.companies else []
     return TargetInstructionSchema(
-        job_title=args.job_title,
-        company_names=args.companies.split(",") if args.companies else [],
+        company=companies[0].strip() if companies else "",
+        role=args.job,
         location=args.location,
-        salary_range=args.salary,
-        experience=args.experience,
         keywords=args.keywords.split(",") if args.keywords else [],
-        exclude_keywords=args.exclude.split(",") if args.exclude else [],
-        application_count=args.max_applications,
-        priority_sites=args.sites.split(",") if args.sites else []
+        exclude_keywords=args.exclude.split(",") if args.exclude else []
     )
 
 
@@ -140,33 +137,20 @@ async def run_interactive_mode():
     print("\n📍 工作地点 (留空则不限):")
     location = input("   例如: 北京,上海,深圳: ").strip()
 
-    print("\n💰 期望薪资 (留空则不限):")
-    salary = input("   例如: 15-25K: ").strip()
-
-    print("\n📅 工作经验 (留空则不限):")
-    experience = input("   例如: 3-5年: ").strip()
-
     print("\n🔑 技能关键词 (用逗号分隔):")
     keywords = input("   例如: React,Vue,TypeScript: ").strip()
 
     print("\n🚫 排除关键词 (用逗号分隔):")
     exclude = input("   例如: 管理,销售: ").strip()
 
-    print("\n⚙️ 其他设置:")
-    max_apps = input("   最多申请数 (留空默认10): ").strip() or "10"
-    sites = input("   优先招聘网站 (用逗号分隔): ").strip()
-
     # 创建指令
+    companies_list = companies.split(",") if companies else []
     instruction = TargetInstructionSchema(
-        job_title=job_title,
-        company_names=companies.split(",") if companies else [],
+        company=companies_list[0].strip() if companies_list else "",
+        role=job_title,
         location=location,
-        salary_range=salary,
-        experience=experience,
         keywords=keywords.split(",") if keywords else [],
-        exclude_keywords=exclude.split(",") if exclude else [],
-        application_count=int(max_apps),
-        priority_sites=sites.split(",") if sites else []
+        exclude_keywords=exclude.split(",") if exclude else []
     )
 
     return pdf_path, instruction
@@ -191,19 +175,19 @@ async def resume_info_mode(pdf_path: str):
         print(f"姓名: {resume.name}")
         print(f"电话: {resume.phone}")
         print(f"邮箱: {resume.email}")
-        print(f"求职意向: {resume.career_objective}")
+        print(f"个人简介: {resume.summary}")
 
         if resume.work_experience:
             print(f"\n💼 工作经历 ({len(resume.work_experience)} 条):")
             for i, work in enumerate(resume.work_experience[:3], 1):
-                print(f"\n  {i}. {work.company_name} - {work.position}")
+                print(f"\n  {i}. {work.company} - {work.position}")
                 print(f"     时间: {work.start_date} 至 {work.end_date}")
                 print(f"     描述: {work.description[:100]}...")
 
-        if resume.project_experience:
-            print(f"\n🚀 项目经验 ({len(resume.project_experience)} 个):")
-            for i, project in enumerate(resume.project_experience[:3], 1):
-                print(f"\n  {i}. {project.project_name}")
+        if resume.projects:
+            print(f"\n🚀 项目经验 ({len(resume.projects)} 个):")
+            for i, project in enumerate(resume.projects[:3], 1):
+                print(f"\n  {i}. {project.name}")
                 print(f"     描述: {project.description[:100]}...")
                 print(f"     技术栈: {', '.join(project.technologies[:5])}")
 
@@ -352,10 +336,10 @@ async def main():
 
     print(f"\n🚀 开始执行求职流程...")
     print(f"📄 简历文件: {pdf_path}")
-    print(f"🎯 目标职位: {instruction.job_title}")
+    print(f"🎯 目标职位: {instruction.role}")
 
-    if instruction.company_names:
-        print(f"🏢 目标公司: {', '.join(instruction.company_names)}")
+    if instruction.company:
+        print(f"🏢 目标公司: {instruction.company}")
 
     # 创建编排器
     orchestrator = ApplicationOrchestrator()
