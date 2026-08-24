@@ -1,295 +1,397 @@
-<div align="center">
+# 🤖 AI Job Agent v2.0 - 智能求职助手
 
-# 🤖 AI Job Application Assistant
+> **版本**: 2.0 | **状态**: ✅ 生产就绪 | **类型**: 自主求职Agent
 
-[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.0+-green.svg)](https://python.langchain.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/xing345/ai-job-application-agent?style=social)](https://github.com/xing345/ai-job-application-agent)
+## 📋 项目概述
 
-[📖 中文文档](README.md) | [🇺🇸 English](README.en.md)
+AI Job Agent v2.0 是一个具备自主决策、智能学习和自适应能力的求职助手。它能够自动搜索、分析、申请职位，并在收到拒信时进行深度反思，不断优化求职策略。
 
-**AI-Powered Job Application Assistant - 自动化求职助手**
+### 🚀 核心特性
 
-> 使用 AI 技术实现从简历解析到职位申请的全流程自动化，大幅提升求职效率。
+1. **自主求职流程** - 从搜索到申请的全自动化
+2. **智能匹配算法** - 多维度职位匹配评分系统
+3. **未知网站导航** - 自适应官网结构解析
+4. **智能表单填充** - AI驱动的表单识别与填写
+5. **自反思学习系统** - 从拒信中学习和进化
+6. **实时监控Dashboard** - 可视化Agent行为监控
+7. **邮箱监听** - 自动检测并处理拒信
+8. **动态策略优化** - 基于经验的规则引擎
 
-</div>
-
----
-
-## 🎯 功能特性
-
-### ✨ 核心功能
-- **📝 简历解析** - 自动解析 PDF 简历，提取个人信息和工作经历
-- **🔍 智能搜索** - 基于 Tavily API 搜索匹配的职位
-- **🎯 精准匹配** - 使用 LLM 分析职位描述，计算匹配度
-- **🤖 自动申请** - 使用 Playwright 自动填写申请表单
-- **📧 邮件监听** - 自动监听面试邮件，智能分类处理
-- **📅 日历同步** - 自动创建面试日历事件，发送提醒
-- **🔄 状态管理** - 基于 LangGraph 的完整状态机管理
-
-### 🚀 技术亮点
-- **端到端自动化** - 一键完成整个求职流程
-- **AI 驱动决策** - 大语言模型赋能的智能匹配
-- **Human-in-the-Loop** - 关键节点人工干预，确保安全
-- **模块化设计** - 高度解耦，易于扩展和维护
-- **异步处理** - 高效的并发操作处理
-
----
-
-## 🏗️ 架构设计
+### 🎯 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     AI Job Application Agent                │
-├─────────────────────────────────────────────────────────────┤
-│  📱 CLI Interface                                           │
-├─────────────────────────────────────────────────────────────┤
-│  🔄 LangGraph State Machine                                │
-├─────────────────────────────────────────────────────────────┤
-│  🔍 Job Search  📝 Form Fill  📧 Email Monitor  📅 Calendar │
-├─────────────────────────────────────────────────────────────┤
-│  🤖 LLM Engine  🔗 Web APIs  📊 Data Models              │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                 Agent Orchestrator                 │
+│                 (中央控制器)                       │
+├─────────────────────────────────────────────────────┤
+│  🔍 JobSearcher   🧠 MatchingEngine  🌐 BrowserAgent │
+│  📧 EmailListener 🧠 ReflectionSystem 📝 FormFiller   │
+└─────────────────────────────────────────────────────┘
 ```
 
----
+## 🛠️ 安装指南
 
-## 📦 安装指南
+### 1. 环境要求
 
-### 环境要求
 - Python 3.11+
-- 有效的 API 密钥（OpenAI、Tavily、Google）
-
-### 1. 克隆仓库
-```bash
-git clone https://github.com/xing345/ai-job-application-agent.git
-cd ai-job-application-agent
-```
+- Node.js (可选，用于Playwright浏览器驱动)
+- 稳定的网络连接
 
 ### 2. 安装依赖
+
 ```bash
+# 克隆项目
+git clone <repository-url>
+cd ai-agent
+
+# 安装Python依赖
 pip install -r requirements.txt
+
+# 安装Playwright浏览器驱动
+playwright install
 ```
 
-### 3. 配置 API 密钥
-创建 `.env` 文件：
+### 3. 配置设置
+
+1. **创建配置文件**
+
 ```bash
-cp .env.example .env
+# 复制默认配置
+cp config.json.example config.json
 ```
 
-编辑 `.env` 文件：
-```env
-# OpenAI API Key (用于 LLM 分析)
-OPENAI_API_KEY=your_openai_api_key
+2. **编辑配置**
 
-# Tavily API Key (用于职位搜索)
-TAVILY_API_KEY=your_tavily_api_key
-
-# Gmail API (用于邮件监听 - 可选)
-GMAIL_API_KEY=your_gmail_api_key
-GMAIL_CLIENT_ID=your_gmail_client_id
-GMAIL_CLIENT_SECRET=your_gmail_client_secret
-GMAIL_REFRESH_TOKEN=your_gmail_refresh_token
-
-# Google Calendar API (可选)
-GOOGLE_CALENDAR_API_KEY=your_calendar_api_key
+```json
+{
+  "email": {
+    "enabled": true,
+    "server": "imap.gmail.com",
+    "username": "your_email@gmail.com",
+    "password": "your_app_password"  # 使用应用专用密码
+  },
+  "llm": {
+    "provider": "openai",
+    "api_key": "your_openai_api_key"
+  },
+  "paths": {
+    "resume": "data/resume.pdf"
+  }
+}
 ```
 
----
+### 4. 准备简历
+
+将您的简历文件放在 `data/` 目录下，支持以下格式：
+- PDF (.pdf)
+- Word (.docx)
+- Text (.txt)
 
 ## 🚀 快速开始
 
-### 基本使用
+### 方式一：使用交互式控制台
+
 ```bash
-# 运行自动申请
-python src/main.py -r resume.pdf -j "前端开发工程师"
+# 启动控制台
+python run_agent.py
 
-# 交互式模式
-python src/main.py --interactive
-
-# 预览模式（不实际执行）
-python src/main.py --dry-run -r resume.pdf -j "前端开发工程师"
-
-# 查看简历信息
-python src/main.py --info resume.pdf
+# 控制台命令示例
+agent> help                    # 查看帮助
+agent> persona                 # 创建用户画像
+agent> search                  # 开始职位搜索
+agent> apply url1 url2         # 申请指定职位
+agent> dashboard               # 启动监控面板
+agent> learn                   # 查看学习洞察
+agent> start                   # 启动持续监控
+agent> exit                     # 退出程序
 ```
 
-### 完整参数
+### 方式二：直接命令执行
+
 ```bash
-python src/main.py \
-    --resume resume.pdf \
-    --job "前端开发工程师" \
-    --companies "字节跳动,腾讯,阿里巴巴" \
-    --location "北京" \
-    --salary "15-25K" \
-    --experience "3-5年" \
-    --keywords "React,Vue,TypeScript" \
-    --exclude "管理,销售" \
-    --max-applications 10 \
-    --sites "boss,zhipin" \
-    --verbose
+# 直接执行特定命令
+python run_agent.py --command search --args
+
+# 申请多个职位
+python run_agent.py --command apply --args https://job1.com/apply https://job2.com/apply
+
+# 启动Dashboard
+python run_agent.py --command dashboard
 ```
 
----
+## 📊 监控面板
 
-## 📁 项目结构
+访问 http://localhost:8501 查看实时监控面板：
 
-```
-ai-job-application-agent/
-├── src/                          # 源代码
-│   ├── models/                  # 数据模型
-│   │   ├── schemas.py           # 简历、职位模型
-│   │   ├── instruction_schemas.py  # 指令模型
-│   │   └── interview_schemas.py  # 面试相关模型
-│   ├── parsers/                 # 解析器
-│   │   └── resume_parser.py     # 简历解析
-│   ├── search/                  # 搜索模块
-│   │   ├── job_finder.py        # 职位搜索
-│   │   ├── job_matcher.py       # 职位匹配
-│   │   └── search_pipeline.py   # 搜索管道
-│   ├── automation/              # 自动化
-│   │   └── auto_fill.py         # 自动填表
-│   ├── notifications/           # 通知服务
-│   │   ├── email_listener.py    # 邮件监听
-│   │   ├── calendar_sync.py      # 日历同步
-│   │   └── notification_pipeline.py  # 通知管道
-│   ├── orchestrator/            # 流程编排
-│   │   ├── state.py             # 状态管理
-│   │   └── graph.py             # 状态图
-│   └── main.py                  # 主入口
-├── tests/                       # 测试
-│   └── integration/             # 集成测试
-├── config/                      # 配置文件
-│   ├── notification_config.py   # 通知配置
-│   └── search_config.py        # 搜索配置
-├── .env.example                 # 环境变量示例
-├── requirements.txt            # 依赖列表
-├── README.md                  # 说明文档
-└── LICENSE                    # 开源协议
-```
+- **核心指标** - 申请数量、成功率、匹配分数
+- **数据可视化** - 漏斗图、分布图、时间线
+- **反思日志** - Agent的学习过程和策略优化
+- **策略规则** - 生成的动态策略规则
 
----
+## 🧠 自反思系统详解
 
-## 🛠️ 配置说明
+### 反思流程
 
-### 招聘网站配置
-编辑 `search_config.py`：
-```python
-PREFERRED_SITES = {
-    "boss": "BOSS直聘",
-    "zhipin": "智联招聘",
-    "liepin": "猎聘网",
-    "51job": "前程无忧"
+1. **拒信检测** - 自动识别HR拒信
+2. **深度分析** - LLM分析失败原因
+3. **策略生成** - 生成改进策略
+4. **规则存储** - 保存到策略规则库
+5. **画像更新** - 根据需要优化用户画像
+
+### 学习维度
+
+| 维度 | 描述 | 示例 |
+|------|------|------|
+| **经验年限** | JD要求与实际经验匹配 | 过滤5+年经验要求 |
+| **技术栈** | 技术能力与JD匹配度 | 优先React生态公司 |
+| **学历/身份** | 学历、工作地点等硬性约束 | 跳过硕士以上要求 |
+| **职位层级** | Senior/Junior级别错位 | 避免投递管理岗 |
+| **文化匹配** | 公司文化与个人特质 | 寻找技术导向公司 |
+
+### 策略规则类型
+
+- **搜索过滤** - 过滤不符合条件的职位
+- **匹配调整** - 调整匹配算法权重
+- **应用策略** - 优先申请的职位类型
+- **画像更新** - 更新用户画像信息
+
+## 📧 邮箱监听配置
+
+### Gmail配置
+
+1. **启用2FA验证**
+2. **生成应用专用密码**
+3. **配置邮箱信息**
+
+```json
+{
+  "email": {
+    "enabled": true,
+    "server": "imap.gmail.com",
+    "username": "your_email@gmail.com",
+    "password": "xxxx xxxx xxxx xxxx"
+  }
 }
 ```
 
-### 通知配置
-编辑 `notification_config.py`：
-```python
-NOTIFICATION_WEBHOOKS = {
-    "feishu": "your_feishu_webhook_url",
-    "wechat": "your_wechat_webhook_url",
-    "telegram": "your_telegram_bot_token"
+### 其他邮箱
+
+支持支持IMAP协议的邮箱服务器：
+- Outlook/Hotmail: outlook.office365.com
+- QQ邮箱: imap.qq.com
+- 163邮箱: imap.163.com
+
+## 📈 使用示例
+
+### 完整求职流程
+
+```bash
+# 1. 创建用户画像
+agent> persona
+# 上传简历，输入职业目标
+
+# 2. 搜索职位
+agent> search
+# 自动搜索匹配的职位
+
+# 3. 查看匹配结果
+agent> status
+# 查看高匹配职位列表
+
+# 4. 申请职位
+agent> apply https://example.com/job/123
+# 智能填写表单并提交
+
+# 5. 启动持续监控
+agent> start
+# Agent会自动监控邮箱处理拒信
+```
+
+### 高级用法
+
+```bash
+# 批量申请
+python run_agent.py --command apply --args url1 url2 url3
+
+# 查看学习洞察
+python run_agent.py --command learn
+
+# 查看实时状态
+python run_agent.py --command status
+
+# 紧急停止
+python run_agent.py --command emergency
+```
+
+## 🐛 故障排除
+
+### 常见问题
+
+1. **无法创建用户画像**
+   - 检查简历文件是否存在
+   - 确认LLM API密钥正确
+   - 检查文件格式支持
+
+2. **职位搜索无结果**
+   - 检查网络连接
+   - 确认用户画像配置
+   - 调整搜索参数
+
+3. **邮箱监听不工作**
+   - 验证邮箱配置
+   - 确认邮箱支持IMAP
+   - 检查网络防火墙设置
+
+4. **Dashboard无法访问**
+   - 确认端口8501未占用
+   - 检查Streamlit安装
+   - 查看浏览器控制台错误
+
+### 日志查看
+
+```bash
+# 查看运行日志
+tail -f logs/agent.log
+
+# 查看浏览器操作日志
+tail -f logs/browser.log
+
+# 查看反思日志
+tail -f logs/reflection.log
+```
+
+## 🔧 高级配置
+
+### 自定义搜索源
+
+```json
+{
+  "search": {
+    "sources": [
+      "linkedin",
+      "bosszhipin",
+      "indeed",
+      "zhaopin"
+    ]
+  }
 }
 ```
 
----
+### 调整匹配算法
 
-## 📊 工作流程
-
-```mermaid
-graph TD
-    A[开始] --> B[解析简历]
-    B --> C[搜索职位]
-    C --> D[匹配评分]
-    D --> E{匹配度≥70%?}
-    E -->|是| F[自动申请]
-    E -->|否| G[跳过]
-    F --> H{需要审批?}
-    H -->|是| I[人工审批]
-    H -->|否| J[继续]
-    I --> J
-    J --> K[监听邮件]
-    K --> L[创建日历]
-    L --> M[发送通知]
-    M --> N[完成]
+```json
+{
+  "matching": {
+    "threshold_score": 75,
+    "auto_apply": true,
+    "dry_run": false
+  }
+}
 ```
 
----
+### 配置浏览器选项
 
-## 🧪 测试验证
-
-运行集成测试：
-```bash
-python tests/integration/test_full_pipeline.py
+```json
+{
+  "browser": {
+    "headless": false,    // 显示浏览器窗口
+    "timeout": 60000,     // 延长超时时间
+    "max_retries": 5      // 增加重试次数
+  }
+}
 ```
 
-测试覆盖：
-- ✅ 基本流程测试
-- ✅ 错误处理测试
-- ✅ 性能测试
+## 📊 性能优化
 
----
+### 提升搜索效率
 
-## ⚠️ 重要说明
+1. **限制搜索范围**
+   ```json
+   {
+     "search": {
+       "max_results_per_search": 30
+     }
+   }
+   ```
 
-### 安全提醒
-1. **API 密钥安全** - 不要将真实的 API 密钥提交到代码仓库
-2. **个人信息保护** - 简历文件包含个人信息，请妥善保管
-3. **使用限制** - 请遵守各招聘网站的使用条款
+2. **调整搜索间隔**
+   ```json
+   {
+     "search": {
+       "interval_hours": 12
+     }
+   }
+   ```
 
-### 使用建议
-1. **测试模式** - 首次使用建议使用 `--dry-run` 预览
-2. **人工监督** - 自动申请时保持人工监督
-3. **定期检查** - 定期查看申请状态和邮件
+### 优化内存使用
 
----
+1. **启用headless模式**
+   ```json
+   {
+     "browser": {
+       "headless": true
+     }
+   }
+   ```
+
+2. **清理缓存**
+   ```bash
+   # 定期清理数据目录
+   rm -rf data/cache/*
+   ```
+
+## 🛡️ 安全注意事项
+
+1. **API密钥保护**
+   - 使用环境变量存储敏感信息
+   - 不要将密钥提交到版本控制
+
+2. **数据隐私**
+   - 简历和个人信息加密存储
+   - 定期清理敏感数据
+
+3. **合规使用**
+   - 遵守网站robots.txt规则
+   - 控制请求频率，避免被封禁
 
 ## 🤝 贡献指南
 
-我们欢迎各种形式的贡献！
+欢迎贡献代码和反馈！
 
-### 如何贡献
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 打开 Pull Request
+### 开发环境设置
 
-### 开发规范
-- 遵循 PEP 8 代码规范
-- 添加适当的注释和文档
-- 编写测试用例
-- 确保所有测试通过
+```bash
+# 克隆开发版本
+git clone <repository-url>
+cd ai-agent
 
----
+# 安装开发依赖
+pip install -r requirements-dev.txt
+
+# 运行测试
+pytest tests/
+
+# 代码格式化
+black src/
+isort src/
+```
+
+### 提交规范
+
+- 使用清晰的commit消息
+- 遵循PEP 8代码规范
+- 添加必要的测试用例
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+## 🆘 技术支持
+
+- 📧 邮箱: support@example.com
+- 🐛 Issues: [GitHub Issues](https://github.com/your-repo/issues)
+- 📖 文档: [Wiki](https://github.com/your-repo/wiki)
 
 ---
 
-## 🙏 致谢
-
-感谢以下开源项目的支持：
-- [LangGraph](https://python.langchain.com/) - 状态图框架
-- [Playwright](https://playwright.dev/) - Web 自动化
-- [Tavily](https://tavily.com/) - 搜索 API
-- [Loguru](https://github.com/Delgan/loguru) - 日志库
-
----
-
-## 📞 联系方式
-
-- GitHub Issues: [提交问题](https://github.com/xing345/ai-job-application-agent/issues)
-- Discussions: [参与讨论](https://github.com/xing345/ai-job-application-agent/discussions)
-
-如果这个项目对您有帮助，请给个 ⭐ Star 支持一下！
-
-<div align="center">
-
-Made with ❤️ by [xing345](https://github.com/xing345)
-
-</div>
+**开始您的智能求职之旅！🚀**
