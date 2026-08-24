@@ -342,6 +342,46 @@ PersonaPrompt = ResumePrompt
 MatchResult = MatchAnalysisResult
 BrowserOp = BrowserAction
 
+class ReflectionResult(BaseModel):
+    """反思结果数据模型"""
+    failure_reason_category: str = Field(..., description="失败原因分类：经验年限不足、技术栈不匹配、学历/身份限制、竞聘过于激烈等")
+    root_cause_analysis: str = Field(..., description="深度分析为什么这个画像与这个岗位不匹配的一句话总结")
+    actionable_advice: List[str] = Field(..., description="对未来投递的具体改进建议")
+    should_update_persona: bool = Field(..., description="是否需要更新 DynamicUserPersona")
+
+
+class StrategyRule(BaseModel):
+    """策略规则数据模型"""
+    rule_type: str = Field(..., description="规则类型：搜索过滤、匹配调整、应用策略等")
+    rule_content: str = Field(..., description="规则内容")
+    confidence_score: float = Field(ge=0.0, le=1.0, description="置信度")
+    is_active: bool = Field(True, description="是否激活")
+    created_at: datetime = Field(default_factory=datetime.now)
+    last_used: Optional[datetime] = Field(None, description="最后使用时间")
+
+
+class ApplicationWithReflection(BaseModel):
+    """包含反思信息的申请记录"""
+    # 基本申请信息
+    id: Optional[int] = Field(None, description="申请ID")
+    job_id: str = Field(..., description="职位ID")
+    company_name: str = Field(..., description="公司名称")
+    job_title: str = Field(..., description="职位名称")
+    match_score: float = Field(..., description="匹配分数")
+    status: str = Field(..., description="申请状态")
+    url: Optional[str] = Field(None, description="职位URL")
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    error_message: Optional[str] = Field(None, description="错误信息")
+    search_source: Optional[str] = Field(None, description="搜索来源")
+
+    # 反思信息（可选）
+    reflection: Optional[ReflectionResult] = Field(None, description="反思结果")
+
+    # 策略规则（可选）
+    applied_rules: List[StrategyRule] = Field(default_factory=list, description="应用的战略规则")
+
+
 __all__ = [
     "ResumeSchema",
     "JobSchema",
@@ -352,6 +392,9 @@ __all__ = [
     "BrowserAction",
     "FormFieldSchema",
     "FormSchema",
+    "ReflectionResult",
+    "StrategyRule",
+    "ApplicationWithReflection",
     "Resume",
     "Job",
     "ApplicationLog",
