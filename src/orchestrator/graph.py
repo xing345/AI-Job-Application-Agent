@@ -261,8 +261,8 @@ async def fill_forms_node(state: AgentState) -> AgentState:
                 state = update_state(state, current_url=url)
                 state = add_log(state, f"正在处理第 {i}/{total_urls} 个职位: {url}")
 
-                # 检查是否需要审批
-                if i == 1:  # 第一个申请需要人工确认
+                # 检查是否需要审批 (仅第一个职位且未审批过时触发, 避免审批死循环)
+                if i == 1 and not state.get("approval_granted", False):
                     state = update_state(
                         state,
                         needs_approval=True,
@@ -274,14 +274,15 @@ async def fill_forms_node(state: AgentState) -> AgentState:
                     )
                     return state
 
-                # 执行自动填报
+                # 执行自动填报 (test_mode=False: 填完后停在浏览器等你手动核对/提交)
                 result = await auto_fill.fill_application_form(
-                    url=url,
+                    job_url=url,
                     resume_data=state["parsed_resume"],
-                    target_instruction=state["target_instruction"]
+                    pdf_path=state.get("pdf_path") or os.path.join(project_root, "data", "resume.pdf"),
+                    test_mode=False
                 )
 
-                if result and result.get("success"):
+                if result and result.success:
                     submitted_urls.append(url)
                     state = add_log(
                         state,
@@ -305,11 +306,12 @@ async def fill_forms_node(state: AgentState) -> AgentState:
                 logger.error(error_msg)
                 state = add_log(state, error_msg)
 
-        # 更新最终状态
+        # 更新最终状态 (标记完成, 避免 should_continue 路由回 search_jobs 造成重复搜索)
         state = update_state(
             state,
             submitted_urls=submitted_urls,
-            progress=95.0
+            progress=95.0,
+            status=AgentStatus.COMPLETED
         )
 
         success_rate = len(submitted_urls) / total_urls * 100 if total_urls > 0 else 0
@@ -349,17 +351,18 @@ async def approval_node(state: AgentState) -> AgentState:
         state = update_state(
             state,
             needs_approval=False,
-            approved_by="user",
+            approval_by="user",
             approval_notes="手动批准",
             progress=80.0
         )
+        state["approval_granted"] = True
         state = add_log(state, "✅ 人工审批通过，继续执行")
         return state
     else:
         state = update_state(
             state,
             needs_approval=False,
-            approved_by="user",
+            approval_by="user",
             approval_notes="手动拒绝",
             progress=0.0
         )

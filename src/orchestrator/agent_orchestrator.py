@@ -336,7 +336,7 @@ class AgentOrchestrator:
                         self.agent_metrics['total_applications'] += 1
 
                         # 如果提交成功
-                        if result.get('submited', False):
+                        if result.get('submitted', False):
                             self.agent_metrics['successful_submissions'] += 1
 
                         logger.info(f"✅ 成功申请: {url}")
