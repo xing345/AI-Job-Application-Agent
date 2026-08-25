@@ -51,6 +51,9 @@ streamlit>=1.28.0
 pandas>=2.1.0
 plotly>=5.17.0
 
+# Career 岗位诊断 (针对性简历生成)
+python-docx>=1.1.0
+
 # Testing
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

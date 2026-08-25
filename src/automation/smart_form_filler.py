@@ -469,15 +469,34 @@ class SmartFormFiller:
             填写指令列表
         """
         try:
-            # 构建用户数据
+            # 构建用户数据 (兼容 pydantic 模型与 dict)
+            def _g(_p, _k, _default=None):
+                return getattr(_p, _k, None) if not isinstance(_p, dict) else _p.get(_k, _default)
+
+            tech_skills = _g(persona, "technical_skills", {}) or {}
+            if isinstance(tech_skills, dict):
+                skill_list = [s for skills in tech_skills.values() for s in (skills or [])]
+            else:
+                skill_list = list(tech_skills)
+
+            career_obj = _g(persona, "career_objective", {}) or {}
+            if isinstance(career_obj, dict):
+                locations = career_obj.get("location_preference") or []
+                salary = career_obj.get("salary_expectation")
+            else:
+                locations = getattr(career_obj, "location_preference", None) or []
+                salary = getattr(career_obj, "salary_expectation", None)
+
+            work_exp = _g(persona, "work_experience", []) or []
+
             user_data = {
-                "name": persona.name,
-                "email": persona.email,
-                "phone": persona.phone,
-                "skills": list(set(skill for skills in persona.technical_skills.values() for skill in skills)),
-                "experience_years": len(persona.work_experience) if hasattr(persona, 'work_experience') else 0,
-                "location": persona.career_objective.location_preference[0] if persona.career_objective.location_preference else "未知",
-                "salary_expectation": persona.career_objective.salary_expectation or "面议"
+                "name": _g(persona, "name", ""),
+                "email": _g(persona, "email", ""),
+                "phone": _g(persona, "phone", ""),
+                "skills": list(set(skill_list)),
+                "experience_years": len(work_exp),
+                "location": locations[0] if locations else "未知",
+                "salary_expectation": salary or "面议"
             }
 
             prompt = f"""

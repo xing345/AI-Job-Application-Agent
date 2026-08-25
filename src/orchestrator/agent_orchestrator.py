@@ -345,12 +345,13 @@ class AgentOrchestrator:
                 self.current_tasks[task_id]['error'] = str(e)
             raise
 
-    async def apply_to_jobs(self, job_urls: List[str]):
+    async def apply_to_jobs(self, job_urls: List[str], resume_path: str = None):
         """
         申请指定职位的链接
 
         Args:
             job_urls: 职位URL列表
+            resume_path: 简历文件路径 (用于上传, 默认取 config paths.resume)
         """
         logger.info(f"开始申请 {len(job_urls)} 个职位...")
 
@@ -371,7 +372,8 @@ class AgentOrchestrator:
                     result = await self.form_filler.fill_form(
                         url=url,
                         persona=self.user_persona,
-                        storage_path=str(Path(self.db_path).parent / "forms")
+                        storage_path=str(Path(self.db_path).parent / "forms"),
+                        resume_path=resume_path
                     )
 
                     if result['success']:
@@ -417,6 +419,307 @@ class AgentOrchestrator:
             raise
 
         return task_id
+
+    # ------------------------------------------------------------------ #
+    # 岗位诊断模式: 智能访谈 → 方向诊断 → 按方向搜索 → 挑目标岗 → 针对性简历 → 投递
+    # ------------------------------------------------------------------ #
+    async def run_career_discovery_workflow(self, ask_func=None):
+        """
+        岗位诊断模式 - 不依赖简历, 根据求职者实际情况找岗并给建议, 再针对性做简历
+
+        Args:
+            ask_func: 提问函数 (默认终端 input, 测试时可注入)
+
+        Returns:
+            dict: 诊断结果 (画像/方向/目标岗位/简历路径) 或 None
+        """
+        from src.career.interviewer import CareerInterviewer
+        from src.career.analyzer import CareerDirectionAnalyzer
+        from src.career.resume_builder import TargetedResumeGenerator
+
+        ask = ask_func or input
+        print("\n" + "=" * 60)
+        print("🧭 岗位诊断模式")
+        print("=" * 60)
+        print("第1步 智能访谈: 让我先了解你的实际情况\n")
+        print("   (会的东西多而杂没关系, 我会帮你梳理; 不知道怎么答就说\"跳过\")")
+
+        # 1. 智能访谈
+        interviewer = CareerInterviewer()
+        profile = await interviewer.run_interview(ask_func=ask)
+        self._save_user_profile(profile)
+        self._print_profile_summary(profile)
+
+        # 2. 方向诊断
+        print("\n🧠 正在分析你的技能与经历, 梳理可行的岗位方向...")
+        analyzer = CareerDirectionAnalyzer()
+        analysis = await analyzer.analyze(profile)
+        self._save_career_directions(analysis)
+        self._print_directions(analysis)
+
+        # 3. 选择主攻方向
+        chosen = self._choose_directions(analysis, ask)
+        if not chosen:
+            print("未选择任何方向, 诊断模式结束。")
+            return None
+        direction = chosen[0]
+
+        # 4. 从实际情况 + 目标方向构建画像
+        print(f"\n👤 正在根据你的实际情况与方向「{direction.title}」构建用户画像...")
+        self.user_persona = await self._build_persona_from_profile(profile, direction, ask)
+        if self.user_persona is None:
+            print("缺少投递所需的基本信息, 诊断模式结束。")
+            return None
+        await self._save_user_persona()
+
+        # 5. 按方向关键词搜索 + 匹配
+        print(f"\n🔍 正在按方向「{direction.title}」搜索岗位...")
+        jobs, matching_results = await self._search_by_direction(direction)
+        if not jobs:
+            print("❌ 未搜索到岗位。可换一个方向重试, 或稍后再试。")
+            return None
+        self._save_search_results(jobs, matching_results)
+        self._print_matched_jobs(jobs)
+
+        # 6. 选择目标岗位
+        target_jobs = self._choose_target_jobs(jobs, ask)
+        if not target_jobs:
+            print("未选择目标岗位, 诊断模式结束。")
+            return None
+
+        # 7. 针对目标岗位生成简历
+        print("\n📄 正在根据目标岗位 JD 生成针对性简历...")
+        resume_builder = TargetedResumeGenerator()
+        draft = await resume_builder.generate_draft(profile, self.user_persona, direction, target_jobs)
+        resume_path = resume_builder.render_docx(
+            draft, str(Path(project_root) / "data" / "resume.docx")
+        )
+        print(f"\n✅ 针对性简历已生成: {resume_path}")
+        print("   ⚠️ 请先打开 Word 检查并修改简历, 确认无误后再投递。")
+
+        # 8. 确认后投递
+        confirm = ask(f"\n是否立即投递这 {len(target_jobs)} 个岗位? (y/n): ").strip().lower()
+        if confirm in ("y", "yes", "是"):
+            await self.apply_to_jobs([j["url"] for j in target_jobs], resume_path=resume_path)
+        else:
+            print("已跳过投递。岗位结果已保存到 Dashboard, 简历已生成, 之后可用 `apply` 命令投递。")
+
+        return {
+            "profile": profile.model_dump(mode="json"),
+            "directions": analysis.model_dump(mode="json"),
+            "chosen_direction": direction.model_dump(mode="json"),
+            "target_jobs": target_jobs,
+            "resume_path": resume_path,
+        }
+
+    def _save_user_profile(self, profile):
+        """保存访谈产出的实际情况"""
+        try:
+            path = Path(project_root) / "data" / "user_profile.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(profile.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            logger.info(f"用户实际情况已保存: {path}")
+        except Exception as e:
+            logger.error(f"保存用户实际情况失败: {e}")
+
+    def _save_career_directions(self, analysis):
+        """保存岗位方向诊断结果 (供 Dashboard 展示)"""
+        try:
+            path = Path(project_root) / "data" / "career_directions.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(analysis.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            logger.info(f"岗位方向诊断已保存: {path}")
+        except Exception as e:
+            logger.error(f"保存岗位方向诊断失败: {e}")
+
+    def _print_profile_summary(self, profile):
+        """打印访谈结果摘要"""
+        print("\n" + "=" * 60)
+        print("📋 已收集到你的实际情况 (保存于 data/user_profile.json)")
+        print("=" * 60)
+        print(f"姓名: {profile.name or '未提供'} | 邮箱: {profile.email or '未提供'} | 电话: {profile.phone or '未提供'}")
+        if profile.all_skills:
+            print(f"技能: {'、'.join(profile.all_skills)}")
+        if profile.work_experience:
+            exp = "、".join(f"{e.company}({e.role})" for e in profile.work_experience if e.company)
+            print(f"经历: {exp}")
+        if profile.locations:
+            print(f"期望地点: {'、'.join(profile.locations)}")
+        if profile.salary_expectation:
+            print(f"期望薪资: {profile.salary_expectation}")
+        if profile.target_hint:
+            print(f"职业想法: {profile.target_hint}")
+
+    def _print_directions(self, analysis):
+        """打印岗位方向诊断结果"""
+        print("\n" + "=" * 60)
+        print("🧭 为你梳理的岗位方向")
+        print("=" * 60)
+        for i, d in enumerate(analysis.directions, 1):
+            stars = "★" * d.priority + "☆" * (5 - d.priority)
+            print(f"\n[{i}] {d.title}  推荐度 {stars}")
+            print(f"    为什么适合: {d.summary}")
+            print(f"    目标职位: {'、'.join(d.target_positions)}")
+            print(f"    搜索关键词: {'、'.join(d.keywords)}")
+            print(f"    你的亮点: {'、'.join(d.skill_highlights)}")
+            print(f"    需要补: {'、'.join(d.skill_gaps) if d.skill_gaps else '暂无明显短板'}")
+            print(f"    市场情况: {d.market_note}")
+            print(f"    建议: {d.advice}")
+        print(f"\n💡 总体建议: {analysis.overall_advice}")
+
+    def _choose_directions(self, analysis, ask=None) -> List:
+        """让用户选择主攻方向 (支持多选, 取第一个为主攻)"""
+        ask = ask or input
+        while True:
+            inp = ask("\n请输入要主攻的方向序号 (可多选, 空格分隔; 直接回车选推荐第1个): ").strip()
+            if not inp:
+                return [analysis.directions[0]]
+            try:
+                idxs = [int(x) - 1 for x in inp.split()]
+                chosen = [analysis.directions[i] for i in idxs if 0 <= i < len(analysis.directions)]
+                if chosen:
+                    return chosen
+            except ValueError:
+                pass
+            print("输入无效, 请重新输入。")
+
+    async def _build_persona_from_profile(self, profile, direction, ask=None):
+        """
+        从实际情况 + 目标方向构建用户画像 dict
+        technical_skills 按 dict 约定 (匹配引擎与表单填充都按 dict 读取)
+        """
+        ask = ask or input
+        name = profile.name or ""
+        email = profile.email or ""
+        phone = profile.phone or ""
+
+        if not name or not email:
+            print("\n⚠️ 投递需要基本联系方式:")
+            if not name:
+                name = ask("姓名: ").strip()
+            if not email:
+                email = ask("邮箱: ").strip()
+            if not phone:
+                phone = ask("电话: ").strip()
+        if not email:
+            print("❌ 缺少邮箱, 无法投递。")
+            return None
+
+        skills = list(dict.fromkeys(profile.all_skills))
+        return {
+            "name": name,
+            "email": email,
+            "phone": phone,
+            "technical_skills": {"all": skills},
+            "soft_skills": {},
+            "domain_knowledge": {},
+            "career_objective": {
+                "target_positions": direction.target_positions,
+                "preferred_industries": direction.preferred_industries,
+                "location_preference": profile.locations or [],
+                "salary_expectation": profile.salary_expectation or "面议",
+                "work_type_preference": profile.work_type or "",
+                "career_growth_focus": direction.keywords[:5],
+            },
+            "constraints": {
+                "excluded_companies": [], "excluded_industries": [],
+                "excluded_positions": [], "compensation_floor": None,
+                "compensation_ceiling": None, "location_constraints": [],
+                "travel_requirements": None, "work_schedule": None,
+            },
+            "personality_traits": {},
+            "work_preferences": {},
+            "motivators": [],
+            "deal_breakers": profile.deal_breakers,
+            "strengths": direction.skill_highlights,
+            "weaknesses": direction.skill_gaps,
+            "ideal_work_environment": [],
+            "version": "career-discovery",
+        }
+
+    async def _search_by_direction(self, direction) -> tuple:
+        """
+        按方向关键词搜索岗位 (复用已配置的搜索管道, 直接传方向关键词)
+        Returns:
+            (jobs, matching_results) 与 start_job_search_workflow 同构
+        """
+        from src.models.instruction_schemas import TargetInstructionSchema
+        from src.models.schemas import ResumeSchema
+
+        locations = []
+        if isinstance(self.user_persona, dict):
+            obj = self.user_persona.get("career_objective", {}) or {}
+            locations = obj.get("location_preference") or []
+
+        target_info = TargetInstructionSchema(
+            company="",
+            role=(direction.target_positions[0] if direction.target_positions else direction.title),
+            location=(locations[0] if locations else None),
+            keywords=direction.keywords,
+        )
+        resume = ResumeSchema(
+            name=(self.user_persona or {}).get("name", ""),
+            email=(self.user_persona or {}).get("email", "candidate@example.com"),
+            phone=(self.user_persona or {}).get("phone", ""),
+            summary=f"求职目标: {direction.title}",
+            skills=direction.keywords,
+            work_experience=[],
+            education=[],
+            projects=[],
+        )
+
+        results = await self.job_searcher.pipeline.run_search_pipeline(
+            target_info, resume, min_score=50, max_results=10
+        )
+        jobs = [{
+            "url": r.url,
+            "title": r.title,
+            "description": r.match_result.match_summary or r.title,
+            "match_result": r.match_result,
+            "match_score": r.match_result.score,
+        } for r in results]
+        matching_results = [j["match_result"] for j in jobs]
+        logger.info(f"按方向搜索完成: {direction.title}, 共 {len(jobs)} 个岗位")
+        return jobs, matching_results
+
+    def _print_matched_jobs(self, jobs):
+        """打印搜索到的岗位"""
+        print("\n" + "=" * 60)
+        print(f"🎯 搜索到的岗位 ({len(jobs)} 个)")
+        print("=" * 60)
+        for i, job in enumerate(jobs, 1):
+            mr = job.get("match_result")
+            score = job.get("match_score", 0)
+            reasons = []
+            if mr is not None and hasattr(mr, "reasons") and mr.reasons:
+                reasons = mr.reasons[:3]
+            print(f"\n[{i}] {job.get('title', '未知职位')}  匹配 {score}/100")
+            print(f"    {job.get('url')}")
+            if reasons:
+                print(f"    匹配点: {'、'.join(reasons)}")
+
+    def _choose_target_jobs(self, jobs, ask=None) -> List:
+        """让用户选择目标岗位"""
+        ask = ask or input
+        while True:
+            inp = ask("\n选择要投递的岗位序号 (可多选, 空格分隔; 直接回车选匹配分≥60的岗位): ").strip()
+            try:
+                if not inp:
+                    chosen = [j for j in jobs if j.get("match_score", 0) >= 60]
+                    return chosen or [jobs[0]]
+                idxs = [int(x) - 1 for x in inp.split()]
+                chosen = [jobs[i] for i in idxs if 0 <= i < len(jobs)]
+                if chosen:
+                    return chosen
+            except ValueError:
+                pass
+            print("输入无效, 请重新输入。")
 
     async def start_continuous_monitoring(self):
         """启动持续监控模式"""

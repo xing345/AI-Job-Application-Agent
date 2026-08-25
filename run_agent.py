@@ -86,6 +86,9 @@ class AgentConsole:
         elif cmd == "persona":
             await self._create_persona()
 
+        elif cmd in ("diagnose", "career"):
+            await self._run_career_mode()
+
         elif cmd == "dashboard":
             await self._start_dashboard()
 
@@ -115,6 +118,7 @@ class AgentConsole:
         print("  stop              - 停止Agent")
         print("  search            - 开始职位搜索")
         print("  apply <urls>      - 申请指定职位的URL")
+        print("  diagnose/career   - 岗位诊断模式(根据实际情况找岗+做简历)")
         print("  persona           - 创建/更新用户画像")
         print("  dashboard         - 启动监控Dashboard")
         print("  learn             - 显示学习洞察")
@@ -323,6 +327,17 @@ class AgentConsole:
         except Exception as e:
             print(f"❌ 创建用户画像失败: {e}")
 
+    async def _run_career_mode(self):
+        """岗位诊断模式: 根据实际情况找岗+做简历+投递"""
+        if not self.agent:
+            print("❌ Agent未初始化")
+            return
+
+        try:
+            await self.agent.run_career_discovery_workflow()
+        except Exception as e:
+            print(f"❌ 岗位诊断模式失败: {e}")
+
     async def _start_dashboard(self):
         """启动Dashboard"""
         print("📊 启动监控Dashboard...")
@@ -435,10 +450,22 @@ async def main():
             # 直接执行命令
             await console.handle_command(args.command, args.args or [])
         else:
-            # 交互式控制台
+            # 交互式控制台 - 启动模式选择
             print("🤖 AI Job Agent v2.0 - 智能求职助手")
             print("=" * 50)
-            print("输入 'help' 查看可用命令")
+            print("请选择启动模式:")
+            print("  [1] 🧭 岗位诊断模式 - 根据你的实际情况找岗位、给建议、做简历 (推荐)")
+            print("  [2] 📄 简历驱动模式 - 基于现有简历找岗位投递")
+            print("=" * 50)
+
+            mode = input("\n请选择 (1/2, 直接回车选1): ").strip()
+            if mode != "2":
+                print("\n>>> 启动岗位诊断模式 <<<")
+                await console._run_career_mode()
+            else:
+                print("\n>>> 简历驱动模式: 用 persona 生成画像, search 搜索, apply 投递 <<<")
+
+            print("\n输入 'help' 查看可用命令")
             print("=" * 50)
 
             console.running = True

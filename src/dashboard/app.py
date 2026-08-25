@@ -484,6 +484,58 @@ def main():
     else:
         st.info("尚未生成用户画像。Agent 解析简历后会自动生成并保存到 `data/user_persona.json`。")
 
+    # ============ 岗位诊断 ============
+    st.markdown("---")
+    st.subheader("🧭 岗位诊断")
+
+    directions_path = root / "data" / "career_directions.json"
+    profile_path = root / "data" / "user_profile.json"
+
+    # 用户实际情况
+    if profile_path.exists():
+        try:
+            profile = json.loads(profile_path.read_text(encoding='utf-8'))
+            with st.expander("📋 访谈收集到的实际情况"):
+                st.markdown(f"**姓名**: {profile.get('name') or '未提供'} | **邮箱**: {profile.get('email') or '未提供'} | **电话**: {profile.get('phone') or '未提供'}")
+                skills = profile.get('all_skills') or []
+                if skills:
+                    st.markdown(f"**技能**: `{'`, `'.join(skills)}`")
+                exp = profile.get('work_experience') or []
+                if exp:
+                    st.markdown(f"**经历**: " + "、".join(f"{e.get('company')}({e.get('role')})" for e in exp if e.get('company')))
+                if profile.get('locations'):
+                    st.markdown(f"**期望地点**: {'、'.join(profile.get('locations'))}")
+                if profile.get('salary_expectation'):
+                    st.markdown(f"**期望薪资**: {profile.get('salary_expectation')}")
+        except Exception as e:
+            st.error(f"解析 user_profile.json 失败: {e}")
+
+    if not directions_path.exists():
+        st.info("尚未运行岗位诊断。启动时选「岗位诊断模式」或执行 `diagnose` 命令, 诊断结果会出现在这里。")
+    else:
+        try:
+            analysis = json.loads(directions_path.read_text(encoding='utf-8'))
+            directions = analysis.get('directions', [])
+            if directions:
+                for i, d in enumerate(directions, 1):
+                    priority = d.get('priority', 1)
+                    stars = "★" * priority + "☆" * (5 - priority)
+                    with st.expander(f"[{i}] {d.get('title')}  {stars}"):
+                        st.markdown(f"**为什么适合**: {d.get('summary', '')}")
+                        st.markdown(f"**目标职位**: {'、'.join(d.get('target_positions', []))}")
+                        st.markdown(f"**搜索关键词**: `{'`、`'.join(d.get('keywords', []))}`")
+                        st.markdown(f"**你的亮点**: {'、'.join(d.get('skill_highlights', []))}")
+                        gaps = d.get('skill_gaps', [])
+                        st.markdown(f"**需要补**: {'、'.join(gaps) if gaps else '暂无明显短板'}")
+                        st.markdown(f"**市场情况**: {d.get('market_note', '')}")
+                        st.markdown(f"**建议**: {d.get('advice', '')}")
+                if analysis.get('overall_advice'):
+                    st.info(f"💡 **总体建议**: {analysis.get('overall_advice')}")
+            else:
+                st.warning("诊断结果中没有方向数据。")
+        except Exception as e:
+            st.error(f"解析 career_directions.json 失败: {e}")
+
     # 数据可视化
     st.markdown("---")
     st.subheader("📊 数据可视化")
