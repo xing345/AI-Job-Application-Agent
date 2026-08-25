@@ -88,6 +88,19 @@ def init_db():
     )
     ''')
 
+    # 创建job_search_log表 - 搜索结果日志 (供「找到的岗位」视图)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS job_search_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT,
+        title TEXT,
+        company TEXT,
+        description TEXT,
+        match_score REAL,
+        searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
     conn.commit()
     conn.close()
     return db_path
@@ -148,6 +161,24 @@ def load_strategy_rules():
         st.error(f"加载策略规则失败: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=60)
+def load_search_log():
+    """加载搜索结果日志 (找到的岗位)"""
+    db_path = init_db()
+    try:
+        conn = sqlite3.connect(str(db_path))
+        query = """
+        SELECT * FROM job_search_log
+        ORDER BY searched_at DESC
+        LIMIT 500
+        """
+        df = pd.read_sql(query, conn)
+        conn.close()
+        return df
+    except Exception as e:
+        st.error(f"加载搜索结果失败: {e}")
+        return pd.DataFrame()
+
 def get_kpi_cards(df):
     """生成KPI卡片"""
     total_jobs = len(df)
@@ -156,11 +187,12 @@ def get_kpi_cards(df):
     interview_jobs = len(df[df['status'] == 'INTERVIEW_INVITE']) if 'status' in df.columns else 0
     success_rate = (interview_jobs / applied_jobs * 100) if applied_jobs > 0 else 0
 
+    # 注: 无历史基线数据, 不展示伪造的增量
     return [
-        {"title": "已发现岗位", "value": total_jobs, "delta": "+12", "type": "info"},
-        {"title": "高分岗位 (>80)", "value": high_score_jobs, "delta": "+5", "type": "success"},
-        {"title": "已投递", "value": applied_jobs, "delta": "+8", "type": "warning"},
-        {"title": "面试邀请", "value": interview_jobs, "delta": f"+{success_rate:.1f}%", "type": "success"},
+        {"title": "已发现岗位", "value": total_jobs, "delta": None, "type": "info"},
+        {"title": "高分岗位 (>80)", "value": high_score_jobs, "delta": None, "type": "success"},
+        {"title": "已投递", "value": applied_jobs, "delta": None, "type": "warning"},
+        {"title": "面试邀请", "value": interview_jobs, "delta": f"成功率 {success_rate:.1f}%", "type": "success"},
     ]
 
 def create_funnel_chart(df):
@@ -340,8 +372,117 @@ def main():
                 card["title"],
                 card["value"],
                 delta=card["delta"],
-                delta_color=("off" if card["type"] == "info" else card["type"])
+                delta_color="off"
             )
+
+    # ============ 找到的岗位 ============
+    st.markdown("---")
+    st.subheader("🎯 找到的岗位")
+    df_jobs = load_search_log()
+    if not df_jobs.empty:
+        has_score = 'match_score' in df_jobs.columns
+        min_score = st.slider("最低匹配分", 0, 100, 60, key="job_min_score")
+
+        filtered = df_jobs[df_jobs['match_score'] >= min_score] if has_score else df_jobs
+        if filtered.empty:
+            st.info(f"当前筛选条件下没有岗位 (匹配分 ≥ {min_score})")
+        else:
+            st.caption(f"共找到 {len(df_jobs)} 个岗位，其中匹配分 ≥ {min_score} 的有 {len(filtered)} 个")
+            display_jobs = filtered.rename(columns={
+                'searched_at': '发现时间',
+                'title': '职位',
+                'company': '公司',
+                'match_score': '匹配分',
+                'url': '链接'
+            })[['发现时间', '职位', '公司', '匹配分', '链接']]
+            st.dataframe(
+                display_jobs,
+                column_config={
+                    "链接": st.column_config.LinkColumn("打开职位", display_text="🔗 打开"),
+                    "匹配分": st.column_config.NumberColumn("匹配分", format="%.0f"),
+                },
+                width="stretch",
+                hide_index=True
+            )
+            # 匹配分分布图
+            if has_score:
+                fig_jobs = px.histogram(
+                    filtered, x="match_score", nbins=20,
+                    title=f"找到岗位的匹配分分布 (≥{min_score})",
+                    color_discrete_sequence=['#00C49F'],
+                    labels={"match_score": "匹配分"}
+                )
+                fig_jobs.update_layout(xaxis_title="匹配分", yaxis_title="岗位数", bargap=0.1)
+                st.plotly_chart(fig_jobs, width="stretch")
+    else:
+        st.info("暂无搜索结果。运行 Agent 执行一次岗位搜索后，找到的岗位会自动出现在这里。")
+
+    # ============ 准备投递的简历 ============
+    st.markdown("---")
+    st.subheader("📄 准备投递的简历")
+    root = Path(__file__).parent.parent.parent
+
+    # 简历文件状态
+    resume_candidates = [
+        root / "data" / "resume.pdf",
+        root / "data" / "resume.docx",
+        root / "data" / "resume.txt",
+    ]
+    found_resume = next((p for p in resume_candidates if p.exists()), None)
+    if found_resume:
+        size_kb = found_resume.stat().st_size / 1024
+        st.success(f"✅ 简历文件已就绪: `{found_resume.name}` ({size_kb:.0f} KB)")
+    else:
+        st.warning("⚠️ 未找到简历文件。请将 `resume.pdf` / `resume.docx` / `resume.txt` 放到 `data/` 目录。")
+
+    # 用户画像
+    persona_path = root / "data" / "user_persona.json"
+    if persona_path.exists():
+        try:
+            persona = json.loads(persona_path.read_text(encoding='utf-8'))
+            st.success("✅ 用户画像已生成 (投递时使用的信息源)")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**基本信息**")
+                st.markdown(f"- 姓名: {persona.get('name', '未知')}")
+                st.markdown(f"- 邮箱: {persona.get('email', '未知')}")
+                st.markdown(f"- 电话: {persona.get('phone') or '未填写'}")
+            with col2:
+                objective = persona.get('career_objective') or {}
+                st.markdown("**求职意向**")
+                target_positions = objective.get('target_positions') or []
+                st.markdown(f"- 目标岗位: {'、'.join(target_positions) if target_positions else '未设置'}")
+                locations = objective.get('location_preference') or []
+                st.markdown(f"- 期望地点: {'、'.join(locations) if locations else '不限'}")
+                st.markdown(f"- 期望薪资: {objective.get('salary_expectation') or '面议'}")
+
+            # 技能
+            tech_skills = persona.get('technical_skills') or []
+            if isinstance(tech_skills, list) and tech_skills:
+                st.markdown(f"**技术技能**: `{'`, `'.join(tech_skills)}`")
+            elif isinstance(tech_skills, dict):
+                all_skills = []
+                for v in tech_skills.values():
+                    if isinstance(v, list):
+                        all_skills.extend(v)
+                    elif isinstance(v, str):
+                        all_skills.append(v)
+                if all_skills:
+                    st.markdown(f"**技术技能**: `{'`, `'.join(sorted(set(all_skills)))}`")
+
+            # 核心优势
+            strengths = persona.get('strengths') or []
+            if isinstance(strengths, list) and strengths:
+                st.markdown(f"**核心竞争力**: {', '.join(strengths[:5])}")
+
+            # 展开查看完整画像
+            with st.expander("查看完整画像 JSON"):
+                st.json(persona)
+        except Exception as e:
+            st.error(f"解析用户画像失败: {e}")
+    else:
+        st.info("尚未生成用户画像。Agent 解析简历后会自动生成并保存到 `data/user_persona.json`。")
 
     # 数据可视化
     st.markdown("---")

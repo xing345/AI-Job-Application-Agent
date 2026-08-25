@@ -17,7 +17,7 @@ import sqlite3
 # 添加项目根目录到路径
 import sys
 import os
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
 from src.reflection.self_reflection_system import SelfReflectionSystem, process_rejection_workflow

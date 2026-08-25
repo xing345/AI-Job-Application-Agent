@@ -14,7 +14,7 @@ from loguru import logger
 # 添加项目根目录到路径
 import sys
 import os
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, project_root)
 
 # 导入各个模块
@@ -224,13 +224,57 @@ class AgentOrchestrator:
             db_dir.mkdir(parents=True, exist_ok=True)
 
             db_path = db_dir / "user_persona.json"
+            # pydantic 模型需转 dict 才能 json 序列化
+            persona_data = self.user_persona
+            if hasattr(persona_data, "model_dump"):
+                persona_data = persona_data.model_dump(mode="json")
             with open(db_path, 'w', encoding='utf-8') as f:
-                json.dump(self.user_persona, f, ensure_ascii=False, indent=2)
+                json.dump(persona_data, f, ensure_ascii=False, indent=2)
 
             logger.info("用户画像已保存")
 
         except Exception as e:
             logger.error(f"保存用户画像失败: {e}")
+
+    def _save_search_results(self, jobs: List[Dict], matching_results: List) -> None:
+        """将搜索结果持久化到 agent_state.db 的 job_search_log 表, 供 Dashboard 展示"""
+        try:
+            db_path = Path(project_root) / "data" / "agent_state.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS job_search_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT,
+                    title TEXT,
+                    company TEXT,
+                    description TEXT,
+                    match_score REAL,
+                    searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            now = datetime.now().isoformat()
+            for job, match in zip(jobs, matching_results):
+                if isinstance(job, dict):
+                    url = job.get("url")
+                    title = job.get("title")
+                    company = job.get("company") or ""
+                    description = job.get("description") or ""
+                    score = job.get("match_score")
+                else:
+                    url, title, company, description, score = None, str(job), "", "", None
+                if score is None:
+                    score = getattr(match, "match_score", getattr(match, "score", None))
+                conn.execute(
+                    "INSERT INTO job_search_log (url, title, company, description, match_score, searched_at)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (url, title, company, description, score, now),
+                )
+            conn.commit()
+            conn.close()
+            logger.info(f"已保存 {len(jobs)} 条搜索结果到 Dashboard 数据库")
+        except Exception as e:
+            logger.warning(f"保存搜索结果失败: {e}")
 
     async def start_job_search_workflow(self):
         """启动求职工作流"""
@@ -268,6 +312,9 @@ class AgentOrchestrator:
                     job_url=job.get("url") if isinstance(job, dict) else None
                 )
                 matching_results.append(match_result)
+
+            # 持久化搜索结果 (供 Dashboard 展示找到的岗位)
+            self._save_search_results(jobs, matching_results)
 
             # 过滤高匹配度职位
             high_match_jobs = [
