@@ -7,6 +7,8 @@ import asyncio
 import json
 import time
 import base64
+import re
+import sqlite3
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 from pathlib import Path
@@ -16,10 +18,10 @@ from playwright.async_api import Page, Browser, Error, TimeoutError
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
-# 添加项目根目录到路径
+# 添加项目根目录到路径 (注意: 本文件位于 src/automation/ 下, 需上溯 3 层到仓库根)
 import sys
 import os
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, project_root)
 
 from src.utils.llm_client import get_llm_client
@@ -43,6 +45,80 @@ class FormFillContext:
     login_required: bool = False
     storage_path: Optional[str] = None
     interrupted: bool = False
+    resume_path: Optional[str] = None
+
+
+class MissingInfoStore:
+    """缺失信息记忆库
+
+    当表单字段在用户数据中找不到对应信息时, 停下询问用户补充,
+    并将补充结果存入 SQLite, 下次遇到同类字段自动带出。
+    """
+
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or str(Path(project_root) / "data" / "known_fields.db")
+        self._init_db()
+
+    def _init_db(self):
+        try:
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS known_fields (
+                    field_key TEXT PRIMARY KEY,
+                    label TEXT,
+                    value TEXT,
+                    created_at TEXT,
+                    last_used TEXT
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"初始化缺失信息记忆库失败: {e}")
+
+    def get(self, field_key: str, label: str = None) -> Optional[str]:
+        """精确匹配 + 标签包含关系模糊匹配 (处理 '身份证' vs '身份证号' 等变体)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM known_fields WHERE field_key=?", (field_key,)
+            ).fetchone()
+            if row is None and label:
+                label_lower = label.lower()
+                for r in conn.execute("SELECT * FROM known_fields"):
+                    stored = (r["label"] or "").lower()
+                    if stored and (stored in label_lower or label_lower in stored):
+                        row = r
+                        break
+            if row is not None:
+                conn.execute(
+                    "UPDATE known_fields SET last_used=? WHERE field_key=?",
+                    (datetime.now().isoformat(), row["field_key"]),
+                )
+                conn.commit()
+                conn.close()
+                return row["value"]
+            conn.close()
+            return None
+        except Exception as e:
+            logger.warning(f"查询记忆库失败: {e}")
+            return None
+
+    def save(self, field_key: str, label: str, value: str):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            now = datetime.now().isoformat()
+            conn.execute("""
+                INSERT INTO known_fields (field_key, label, value, created_at, last_used)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(field_key) DO UPDATE SET label=?, value=?, last_used=?
+            """, (field_key, label, value, now, now, label, value, now))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"保存记忆库失败: {e}")
 
 
 class SmartFormFiller:
@@ -70,6 +146,23 @@ class SmartFormFiller:
         self.context_cache = {}
         self.storage_dir = Path(project_root) / "storage"
         self.storage_dir.mkdir(exist_ok=True)
+        # 缺失信息记忆库 (SQLite, 存于 data/)
+        self.missing_store = MissingInfoStore()
+        # 默认简历路径 (config.json paths.resume 兜底)
+        self.default_resume_path = self._load_default_resume_path()
+
+    def _load_default_resume_path(self) -> str:
+        """从 config.json 读取默认简历路径"""
+        try:
+            config_path = Path(project_root) / "config.json"
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    resume = json.load(f).get("paths", {}).get("resume")
+                    if resume:
+                        return resume
+        except Exception:
+            pass
+        return str(Path(project_root) / "data" / "resume.pdf")
 
     async def start_browser(self) -> Browser:
         """启动浏览器"""
@@ -402,6 +495,11 @@ class SmartFormFiller:
             3. 填写值
             4. 操作描述
 
+            重要规则：
+            1. 如果某个必填字段在用户数据中找不到对应信息，请将 "value" 设为 "__MISSING__"
+            2. 如果某个可选字段没有对应信息，请将 "value" 设为 "__SKIP__"（跳过不填）
+            3. 绝不编造用户数据中没有的信息，宁可标记为 __MISSING__ 也不要瞎填
+
             输出JSON格式：
             {{
                 "instructions": [
@@ -438,11 +536,55 @@ class SmartFormFiller:
             logger.error(f"生成填写指令失败: {e}")
             return []
 
+    @staticmethod
+    def _field_key(instruction: BrowserAction) -> str:
+        """生成字段唯一键 (基于语义化描述, 不含CSS选择器以便跨站匹配)"""
+        raw = (instruction.description or "").lower()
+        tokens = re.findall(r"[一-鿿0-9a-z]+", raw)
+        return "_".join(tokens)[:80]
+
+    async def _resolve_missing_value(self, instruction: BrowserAction) -> Optional[str]:
+        """缺失字段处理: 先查记忆库, 没有再询问用户并存入记忆库"""
+        key = self._field_key(instruction)
+        if not key:
+            return None
+
+        # 1) 记忆库命中 → 自动带出
+        known = self.missing_store.get(key, instruction.description)
+        if known:
+            logger.info(f"记忆库命中: {instruction.description} = {known}")
+            print(f"   ℹ️ 字段「{instruction.description}」已从记忆库自动填入: {known}")
+            return known
+
+        # 2) 停下询问用户, 并记录到记忆库
+        print(f"\n⚠️ 缺少信息: {instruction.description}")
+        print(f"   目标: {instruction.target}")
+        val = input("   请输入该字段的值 (直接回车跳过): ").strip()
+        if val:
+            self.missing_store.save(key, instruction.description, val)
+            logger.info(f"已记录缺失信息: {instruction.description} = {val}")
+            return val
+        return None
+
+    async def _upload_resume(self, page: Page, resume_path: str) -> bool:
+        """上传简历文件"""
+        try:
+            file_input = await page.query_selector("input[type='file']")
+            if file_input:
+                await file_input.set_input_files(resume_path)
+                logger.info(f"简历已上传: {resume_path}")
+                return True
+            logger.warning("未找到文件上传输入框 (input[type='file'])")
+            return False
+        except Exception as e:
+            logger.error(f"上传简历失败: {e}")
+            return False
+
     async def execute_filling_instructions(
         self,
         context: FormFillContext,
         instructions: List[BrowserAction]
-    ) -> bool:
+    ) -> Dict[str, Any]:
         """
         执行填写指令
 
@@ -451,7 +593,7 @@ class SmartFormFiller:
             instructions: 填写指令
 
         Returns:
-            是否填写成功
+            填写结果: {"success": bool, "submitted": bool, "filled": int}
         """
         page = context.page
         success_count = 0
@@ -459,6 +601,19 @@ class SmartFormFiller:
         for i, instruction in enumerate(instructions, 1):
             try:
                 logger.info(f"执行第 {i} 条指令: {instruction.description}")
+
+                # 可选字段且无数据 → 跳过
+                if instruction.value == "__SKIP__":
+                    logger.info(f"跳过可选字段: {instruction.description}")
+                    continue
+
+                # 必填字段但数据缺失 → 查记忆库 / 询问用户并记录
+                if instruction.value == "__MISSING__":
+                    value = await self._resolve_missing_value(instruction)
+                    if value is None:
+                        logger.warning(f"用户未提供, 跳过字段: {instruction.description}")
+                        continue
+                    instruction.value = value
 
                 if instruction.action_type == "click":
                     # 点击操作
@@ -497,26 +652,49 @@ class SmartFormFiller:
             except Exception as e:
                 logger.error(f"执行指令失败: {instruction.description} - {e}")
 
-        # 提交表单
+        # 上传简历文件 (主路径补上简历投递)
+        uploaded = False
+        resume_path = getattr(context, "resume_path", None)
+        if resume_path and os.path.exists(resume_path):
+            uploaded = await self._upload_resume(page, resume_path)
+
+        # 提交前人工确认 (HITL, 遵守项目安全规则: 绝不自动点击最终提交按钮)
+        submitted = False
         try:
-            submit_selector = context.form_schema.submit_button.get("css_selector")
+            submit_button_data = (context.form_data or {}).get("submit_button") or {}
+            submit_selector = submit_button_data.get("css_selector")
             if submit_selector:
                 submit_button = await page.query_selector(submit_selector)
                 if submit_button:
-                    await submit_button.click()
-                    logger.info("表单提交成功")
-                    return True
+                    print(f"\n{'='*60}")
+                    print("📝 表单填写完成, 即将投递")
+                    print(f"   已填写字段: {success_count}/{len(instructions)}"
+                          + (f", 简历上传: {'✅' if uploaded else '❌'}" if resume_path else ""))
+                    print(f"{'='*60}")
+                    confirm = input("是否确认提交该申请? (y/n): ").strip().lower()
+                    if confirm == 'y':
+                        await submit_button.click()
+                        submitted = True
+                        logger.info("表单已提交")
+                    else:
+                        logger.info("用户取消提交")
+                else:
+                    logger.warning("未找到提交按钮, 跳过提交")
+            else:
+                logger.warning("未解析到提交按钮, 跳过自动提交")
         except Exception as e:
             logger.error(f"提交表单失败: {e}")
 
-        logger.info(f"表单填写完成，成功 {success_count}/{len(instructions)} 条指令")
-        return success_count > len(instructions) * 0.8  # 80%以上成功即认为成功
+        logger.info(f"表单填写完成, 成功 {success_count}/{len(instructions)} 条指令")
+        success = success_count > 0 and success_count >= len(instructions) * 0.6
+        return {"success": success, "submitted": submitted, "filled": success_count}
 
     async def fill_form(
         self,
         url: str,
         persona: DynamicUserPersona,
-        storage_path: str = None
+        storage_path: str = None,
+        resume_path: str = None
     ) -> Dict[str, Any]:
         """
         填写表单的主方法
@@ -525,6 +703,7 @@ class SmartFormFiller:
             url: 表单URL
             persona: 用户画像
             storage_path: 已保存的Cookie路径
+            resume_path: 简历文件路径 (默认取 config.json paths.resume)
 
         Returns:
             填写结果
@@ -597,10 +776,13 @@ class SmartFormFiller:
                 persona=persona,
                 form_data=form_schema.model_dump(),
                 login_required=login_required,
-                storage_path=storage_path
+                storage_path=storage_path,
+                resume_path=resume_path or self.default_resume_path
             )
 
-            fill_success = await self.execute_filling_instructions(form_context, instructions)
+            fill_result = await self.execute_filling_instructions(form_context, instructions)
+            fill_success = fill_result.get("success", False)
+            submitted = fill_result.get("submitted", False)
 
             # 保存Cookie（如果需要）
             if login_required and form_context.storage_path:
@@ -611,10 +793,12 @@ class SmartFormFiller:
 
             return {
                 "success": fill_success,
+                "submitted": submitted,
                 "url": url,
                 "form_title": form_schema.form_title,
                 "field_count": len(form_schema.fields),
                 "completed_steps": len(instructions),
+                "filled_fields": fill_result.get("filled", 0),
                 "storage_path": storage_path,
                 "filled_at": datetime.now().isoformat()
             }
@@ -642,6 +826,7 @@ async def fill_application_form(
     url: str,
     persona: DynamicUserPersona,
     storage_path: str = None,
+    resume_path: str = None,
     headless: bool = False
 ) -> Dict[str, Any]:
     """
@@ -651,13 +836,14 @@ async def fill_application_form(
         url: 表单URL
         persona: 用户画像
         storage_path: Cookie存储路径
+        resume_path: 简历文件路径
         headless: 是否无头模式
 
     Returns:
         填写结果
     """
     filler = SmartFormFiller(headless=headless)
-    return await filler.fill_form(url, persona, storage_path)
+    return await filler.fill_form(url, persona, storage_path, resume_path=resume_path)
 
 
 # 测试函数
