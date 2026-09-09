@@ -21,15 +21,17 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual Environment
+# Virtual environments
+.venv/
 venv/
-env/
 ENV/
-.env
+env/
+env.bak/
+venv.bak/
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
@@ -43,36 +45,74 @@ ENV/
 ehthumbs.db
 Thumbs.db
 
+# Project specific
+.env
+config.json
+logs/
+data/resumes/
+data/logs/
+data/db/
+output/
+temp/
+tmp/
+
+# Test files and coverage
+.coverage
+htmlcov/
+.pytest_cache/
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.env.local
+.env.*.local
+
+# Redis
+dump.rdb
+
+# Local files
+*.local
+local.*
+
+# Temporary directories
+temp_*
+tmp_*
+
 # Logs
 *.log
-logs/
+log/
 
-# Test files
-test_results/
-.pytest_cache/
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-# Documentation
-docs/_build/
+# Generated documents
+generated/
+uploads/
+downloads/
 
-# Project specific
-sample_resume.pdf
-*.tmp
-temp/
-temp_files/
+# Browser cache
+*.cache
 
-# API Keys
-.env.local
-.env.production
-.env.staging
-config/secrets.json
-
-# 本地配置文件（含真实 API key，禁止提交到 Git）
-config.json
-
-# 运行数据（数据库、用户画像含个人简历信息）
-data/
-src/data/
-
-# Cache
-.cache/
-__pycache__/
+# Agent specific
+agent_state.db
+user_persona.json
+application_*.log
+job_application_*.log

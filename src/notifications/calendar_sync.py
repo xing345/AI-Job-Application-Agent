@@ -3,6 +3,7 @@
 使用 Google Calendar API 管理面试日程
 """
 
+import os
 import asyncio
 import json
 from datetime import datetime, timedelta
@@ -215,12 +216,15 @@ class CalendarSync:
 class WebhookService:
     """Webhook 通知服务"""
 
-    def __init__(self):
-        self.webhook_urls = {
-            "feishu": "your_feishu_webhook_url",
-            "wechat": "your_wechat_webhook_url",
-            "telegram": "your_telegram_webhook_url"
-        }
+    def __init__(self, webhook_urls: Optional[Dict[str, str]] = None):
+        # 默认从环境变量读取; 未配置的渠道为空字符串(不会发送)
+        if webhook_urls is None:
+            webhook_urls = {
+                "feishu": os.getenv("NOTIFICATION_WEBHOOKS_FEISHU", ""),
+                "wechat": os.getenv("NOTIFICATION_WEBHOOKS_WECHAT", ""),
+                "telegram": os.getenv("NOTIFICATION_WEBHOOKS_TELEGRAM", ""),
+            }
+        self.webhook_urls = {k: (v or "").strip() for k, v in webhook_urls.items()}
 
     async def send_notification(self, message: str, channels: List[str] = None):
         """
@@ -235,7 +239,9 @@ class WebhookService:
 
         tasks = []
         for channel in channels:
-            if channel in self.webhook_urls and self.webhook_urls[channel] != "your_..._webhook_url":
+            url = self.webhook_urls.get(channel, "")
+            # 仅当配置了真实 URL 且不是占位符时才发送
+            if url and not url.startswith("your_"):
                 task = self._send_to_channel(channel, message)
                 tasks.append(task)
 

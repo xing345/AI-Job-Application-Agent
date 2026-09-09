@@ -55,12 +55,12 @@ class ProjectExperience(BaseModel):
 
 class CareerObjective(BaseModel):
     """职业目标模型"""
-    target_positions: List[str] = Field(..., description="目标职位")
-    preferred_industries: List[str] = Field(..., description="偏好行业")
-    location_preference: List[str] = Field(..., description="地点偏好")
+    target_positions: List[str] = Field(default_factory=list, description="目标职位")
+    preferred_industries: List[str] = Field(default_factory=list, description="偏好行业")
+    location_preference: List[str] = Field(default_factory=list, description="地点偏好")
     salary_expectation: Optional[str] = Field(None, description="薪资期望")
     work_type_preference: Optional[str] = Field(None, description="工作类型偏好")
-    career_growth_focus: List[str] = Field(..., description="职业发展重点")
+    career_growth_focus: List[str] = Field(default_factory=list, description="职业发展重点")
 
 
 class SoftSkills(BaseModel):
@@ -235,26 +235,30 @@ class DynamicUserPersona(BaseModel):
     phone: Optional[str] = Field(None, description="电话")
 
     # 核心技能与能力
-    technical_skills: List[str] = Field(..., description="技术技能")
-    soft_skills: SoftSkills = Field(..., description="软技能")
-    domain_knowledge: Dict[str, int] = Field(..., description="领域知识掌握程度")
+    # 注意: 技术技能统一为"类别 -> 技能列表"的 dict 契约
+    # (生成器/匹配引擎/表单填充/画像文件均按 dict 读写; 简历级技能列表在 ResumeSchema.skills)
+    technical_skills: Optional[Dict[str, List[str]]] = Field(
+        default_factory=dict, description="按类别分组的技术技能"
+    )
+    soft_skills: SoftSkills = Field(default_factory=SoftSkills, description="软技能")
+    domain_knowledge: Dict[str, int] = Field(default_factory=dict, description="领域知识掌握程度")
 
     # 职业目标
-    career_objective: CareerObjective = Field(..., description="职业目标")
-    personality_traits: PersonalityTraits = Field(..., description="性格特质")
+    career_objective: CareerObjective = Field(default_factory=CareerObjective, description="职业目标")
+    personality_traits: PersonalityTraits = Field(default_factory=PersonalityTraits, description="性格特质")
 
     # 约束条件
-    constraints: CareerConstraints = Field(..., description="职业约束")
+    constraints: CareerConstraints = Field(default_factory=CareerConstraints, description="职业约束")
 
     # 隐性特征
-    work_preferences: Dict[str, Any] = Field(..., description="工作偏好")
-    motivators: List[str] = Field(..., description="激励因素")
-    deal_breakers: List[str] = Field(..., description="绝对拒绝的条件")
+    work_preferences: Dict[str, Any] = Field(default_factory=dict, description="工作偏好")
+    motivators: List[str] = Field(default_factory=list, description="激励因素")
+    deal_breakers: List[str] = Field(default_factory=list, description="绝对拒绝的条件")
 
     # 分析维度
-    strengths: List[str] = Field(..., description="核心竞争力")
-    weaknesses: List[str] = Field(..., description="待改进领域")
-    ideal_work_environment: List[str] = Field(..., description="理想工作环境")
+    strengths: List[str] = Field(default_factory=list, description="核心竞争力")
+    weaknesses: List[str] = Field(default_factory=list, description="待改进领域")
+    ideal_work_environment: List[str] = Field(default_factory=list, description="理想工作环境")
 
     # 生成元数据
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")

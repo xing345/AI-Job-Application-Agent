@@ -72,9 +72,9 @@ class AdvancedCrawler:
             return self.browser
 
         self.playwright = await async_playwright().start()
+        # viewport 属于上下文/页面配置, 不能传给 BrowserType.launch()
         self.browser = await self.playwright.chromium.launch(
-            headless=False,  # 默认显示浏览器以便调试
-            viewport={"width": 1280, "height": 720}
+            headless=False  # 默认显示浏览器以便调试
         )
 
         logger.info("浏览器启动成功")

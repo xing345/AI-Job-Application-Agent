@@ -283,15 +283,22 @@ async def fill_forms_node(state: AgentState) -> AgentState:
                 )
 
                 if result and result.success:
+                    # 注意: AutoFillAgent 只负责"填写"，绝不自动点击最终提交。
+                    # 因此这里记录的是"已填写、待人工核对提交"，不能当"已投递"上报。
                     submitted_urls.append(url)
                     state = add_log(
                         state,
-                        f"✅ 第 {i} 个职位申请成功: {url}"
+                        f"✅ 第 {i} 个职位表单已填写完成(待人工核对并手动提交): {url}"
                     )
                 else:
+                    error_detail = ""
+                    if isinstance(result, dict):
+                        error_detail = result.get("error", "")
+                    elif result is not None:
+                        error_detail = str(result)
                     state = add_log(
                         state,
-                        f"❌ 第 {i} 个职位申请失败: {url} - {result.get('error', '未知错误')}"
+                        f"❌ 第 {i} 个职位填写失败: {url} - {error_detail or '未知错误'}"
                     )
 
                 # 更新进度
@@ -317,7 +324,8 @@ async def fill_forms_node(state: AgentState) -> AgentState:
         success_rate = len(submitted_urls) / total_urls * 100 if total_urls > 0 else 0
         state = add_log(
             state,
-            f"自动填报完成！成功率: {success_rate:.1f}% ({len(submitted_urls)}/{total_urls})"
+            f"表单填写完成！填写完成率: {success_rate:.1f}% ({len(submitted_urls)}/{total_urls})，"
+            "提交动作需人工在浏览器中完成"
         )
 
         return state
@@ -382,7 +390,7 @@ async def complete_node(state: AgentState) -> AgentState:
     summary = f"""
     📊 任务执行摘要:
     - 总进度: 100%
-    - 成功提交: {len(state.get('submitted_urls', []))} 个职位
+    - 已填写并待人工提交: {len(state.get('submitted_urls', []))} 个职位
     - 找到职位: {len(state.get('qualified_urls', []))} 个
     - 错误数量: {len(state.get('errors', []))}
     - 日志数量: {len(state.get('logs', []))}

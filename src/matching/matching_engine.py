@@ -59,6 +59,23 @@ class SmartMatchingEngine:
         Returns:
             匹配分析结果
         """
+        # 用户画像为空时不再崩溃, 返回明确失败结果
+        if persona is None:
+            logger.error("匹配评估: 用户画像为空，无法评估")
+            return MatchAnalysisResult(
+                job_id=job_url or "empty",
+                match_score=0.0,
+                strengths_match=[],
+                weaknesses_mismatch=["用户画像为空，无法评估"],
+                cultural_fit_analysis="无法评估",
+                growth_potential="无法评估",
+                compensation_evaluation="无法评估",
+                recommendation="无法评估",
+                priority_level=1,
+                estimated_success_rate=0.0,
+                analyzed_at=datetime.now()
+            )
+
         logger.info(f"开始匹配评估: {persona.name} vs 职位")
 
         # 生成匹配分析
@@ -92,7 +109,7 @@ class SmartMatchingEngine:
                 growth_potential="无法评估",
                 compensation_evaluation="无法评估",
                 recommendation="无法评估",
-                priority_level=0,
+                priority_level=1,
                 estimated_success_rate=0.0,
                 analyzed_at=datetime.now()
             )
@@ -336,7 +353,7 @@ class SmartMatchingEngine:
                         growth_potential="无法评估",
                         compensation_evaluation="无法评估",
                         recommendation="无法评估",
-                        priority_level=0,
+                        priority_level=1,
                         estimated_success_rate=0.0,
                         analyzed_at=datetime.now()
                     )

@@ -43,8 +43,8 @@ async def test_persona_generation():
     print("\n=== 测试动态用户画像生成 ===")
 
     try:
-        # 创建一个模拟的简历文件
-        sample_resume_path = project_root / "output" / "sample_resume.pdf"
+        # 创建一个模拟的简历文件（真实解析器支持 .txt/.pdf/.docx；此处用 .txt 避免伪 .pdf）
+        sample_resume_path = project_root / "output" / "sample_resume.txt"
         sample_resume_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 创建一个简单的文本文件模拟简历
@@ -127,6 +127,7 @@ async def test_skill_extraction():
     print("\n=== 测试技能提取功能 ===")
 
     try:
+        from src.models.dynamic_persona_generator import DynamicUserPersonaGenerator
         client = get_llm_client()
 
         resume_info = """
@@ -136,12 +137,11 @@ async def test_skill_extraction():
         项目: 电商平台、社交应用
         """
 
-        skill_extraction = await client.generate_response(
-            client.prompt_templates["skill_extraction"].format(
-                resume_info=resume_info
-            ),
-            json_output=True
-        )
+        # 提示词模板属于生成器（LLMClient 不再持有 prompt_templates）;
+        # 模板含 JSON 示例花括号, 用 replace 而非 str.format
+        templates = DynamicUserPersonaGenerator().prompt_templates
+        skill_prompt = templates["skill_extraction"].replace("{resume_info}", resume_info)
+        skill_extraction = await client.generate_response(skill_prompt, json_output=True)
 
         print(f"✅ 技能提取成功！")
         print(f"   技术技能: {list(skill_extraction['technical_skills'].keys())}")

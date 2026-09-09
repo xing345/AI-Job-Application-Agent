@@ -14,6 +14,14 @@ import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
+# 加载 .env（密钥环境变量优先于 config.json）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(project_root, ".env"))
+    load_dotenv()
+except ImportError:
+    pass
+
 from src.orchestrator.graph import ApplicationOrchestrator
 from src.orchestrator.state import AgentStatus, print_state_summary
 from src.models.instruction_schemas import TargetInstructionSchema

@@ -5,6 +5,7 @@ LLM客户端工具
 
 import os
 import json
+import re
 import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional, Any, AsyncGenerator
@@ -14,17 +15,23 @@ from loguru import logger
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-
 # 项目根目录下的 config.json（供惰性加载 LLM 配置）
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _PROJECT_ROOT / "config.json"
 _LLM_CONFIG_CACHE: Optional[Dict] = None
+
+
+def _load_env_files() -> None:
+    """加载 .env：优先项目根目录，其次当前工作目录（幂等，缺依赖时静默降级）"""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_PROJECT_ROOT / ".env")
+        load_dotenv()
+    except ImportError:
+        logger.warning("python-dotenv 未安装，.env 将不会被加载")
+
+
+_load_env_files()
 
 
 def _load_llm_config() -> Dict:
@@ -56,7 +63,7 @@ class LLMClient:
         """
         初始化LLM客户端
 
-        未显式传入的参数会依次从 config.json 的 llm 段、环境变量读取。
+        未显式传入的参数会依次从环境变量(.env)、config.json 的 llm 段读取。
 
         Args:
             model: 使用的模型名称
@@ -68,14 +75,15 @@ class LLMClient:
         """
         llm_cfg = _load_llm_config()
 
-        self.model = model or llm_cfg.get("model") or os.getenv("OPENAI_MODEL") or "gpt-4-turbo-preview"
+        # 优先级: 显式参数 > 环境变量 > config.json > 内置默认
+        self.model = model or os.getenv("OPENAI_MODEL") or llm_cfg.get("model") or "gpt-4-turbo-preview"
         self.temperature = temperature if temperature is not None else float(llm_cfg.get("temperature", 0.7))
         self.max_tokens = max_tokens if max_tokens is not None else int(llm_cfg.get("max_tokens", 4000))
         self.timeout = timeout
 
         # 惰性初始化 OpenAI 客户端（避免无 API key 时构造即崩溃）
-        self._api_key = api_key or llm_cfg.get("api_key") or os.getenv("OPENAI_API_KEY")
-        self._base_url = base_url or llm_cfg.get("base_url") or os.getenv("OPENAI_BASE_URL")
+        self._api_key = api_key or os.getenv("OPENAI_API_KEY") or llm_cfg.get("api_key")
+        self._base_url = base_url or os.getenv("OPENAI_BASE_URL") or llm_cfg.get("base_url")
         self._client = None
 
     def _get_client(self) -> AsyncOpenAI:
@@ -153,17 +161,76 @@ class LLMClient:
 
             # 如果是JSON输出，尝试解析
             if json_output:
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    logger.warning("JSON输出解析失败，返回原始文本")
-                    return content
+                return self._parse_json_content(content)
 
             return content
 
         except Exception as e:
             logger.error(f"LLM调用失败: {e}")
             raise
+
+    @staticmethod
+    def _parse_json_content(content: str) -> Dict:
+        """
+        健壮地解析 LLM 返回的 JSON 文本。
+
+        尝试顺序:
+        1. 已是 dict -> 原样返回
+        2. 剥离 ```json 围栏(任意位置) 后, 用 json.JSONDecoder().raw_decode 解析
+           （raw_decode 允许 JSON 后存在尾随文字）
+        3. 逐位置扫描 '{' 作为起点再 raw_decode（容忍前置说明文字）
+        全部失败时抛出带原文摘要的 ValueError（而不是把原始字符串返回给
+        按 dict 取键的调用方，避免 AttributeError 被上层静默吞掉）。
+        """
+        if isinstance(content, dict):
+            return content
+
+        text = (content or "").strip()
+        if not text:
+            raise ValueError("LLM 返回空内容，无法解析为 JSON")
+
+        import re as _re
+        import json as _json
+
+        decoder = _json.JSONDecoder()
+        candidates = []
+
+        # 1) 原文直接 raw_decode (容忍尾部多余文字)
+        candidates.append(text)
+
+        # 2) 去掉 markdown 代码围栏 ```json ... ```
+        fenced = _re.findall(r"```[a-zA-Z]*\s*(.*?)```", text, _re.DOTALL)
+        if fenced:
+            candidates.extend(f.strip() for f in fenced)
+        stripped = _re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", text).strip()
+        if stripped != text:
+            candidates.append(stripped)
+
+        for candidate in candidates:
+            # raw_decode 会解析首个完整 JSON 值并忽略尾随文本
+            try:
+                parsed, _ = decoder.raw_decode(candidate.lstrip())
+                if isinstance(parsed, dict):
+                    return parsed
+            except _json.JSONDecodeError:
+                pass
+
+        # 3) 前置说明文字场景: 从每个 '{' 位置尝试 raw_decode
+        start = 0
+        for _ in range(30):
+            brace = text.find("{", start)
+            if brace == -1:
+                break
+            try:
+                parsed, _ = decoder.raw_decode(text[brace:])
+                if isinstance(parsed, dict):
+                    return parsed
+            except _json.JSONDecodeError:
+                pass
+            start = brace + 1
+
+        snippet = text[:200].replace("\n", " ")
+        raise ValueError(f"LLM JSON 输出解析失败，原文片段: {snippet!r}")
 
     async def generate_structured_response(
         self,

@@ -20,6 +20,7 @@ from src.models.instruction_schemas import TargetInstructionSchema
 from src.models.schemas import ResumeSchema, WorkExperience, Education
 from src.search.job_finder import JobFinder, JobFinderConfig
 from src.search.job_matcher import JobMatcher, JobMatcherConfig, MatchResultSchema
+from src.search.browser_job_finder import BrowserJobFinder
 
 
 @dataclass
@@ -60,12 +61,26 @@ class SearchPipeline:
         tavily_api_key: str,
         openai_api_key: str,
         base_url: str = None,
-        model: str = None
+        model: str = None,
+        use_browser: bool = True,
+        headless: bool = True,
+        interactive: bool = True
     ):
         # 初始化组件
         self.job_finder = JobFinder(JobFinderConfig(api_key=tavily_api_key))
         self.job_matcher = JobMatcher(
             JobMatcherConfig(openai_api_key=openai_api_key, base_url=base_url, model=model)
+        )
+
+        # 真实浏览器职位发现器（方案B：开浏览器遍历招聘站抽取职位链接）
+        self.use_browser = use_browser
+        self.browser_finder = (
+            BrowserJobFinder(
+                tavily_api_key=tavily_api_key,
+                headless=headless,
+                interactive=interactive,
+            )
+            if use_browser else None
         )
 
         # 配置日志
@@ -95,7 +110,7 @@ class SearchPipeline:
 
         # 第一阶段：搜索职位
         logger.info("第一阶段：搜索职位...")
-        job_urls = await self.job_finder.find_job_portals(target_info)
+        job_urls = await self._discover_job_urls(target_info)
         logger.info(f"找到 {len(job_urls)} 个招聘页面")
 
         if not job_urls:
@@ -121,6 +136,37 @@ class SearchPipeline:
         logger.info(f"搜索管道完成，耗时: {end_time - start_time:.2f} 秒")
 
         return final_results
+
+    async def _discover_job_urls(self, target_info: TargetInstructionSchema) -> List[str]:
+        """
+        第一阶段双通道职位发现：
+        - 通道1（原有）：Tavily 限定海外 ATS 域名
+        - 通道2（方案B）：真实浏览器打开招聘门户，DOM 抽取职位详情链接
+        浏览器结果优先，去重合并后返回。
+        """
+        browser_urls: List[str] = []
+        if self.use_browser and self.browser_finder:
+            logger.info("通道2：真实浏览器遍历招聘站找岗...")
+            try:
+                browser_jobs = await self.browser_finder.discover(target_info)
+                browser_urls = [j["url"] for j in browser_jobs if j.get("url")]
+                logger.info(f"浏览器通道发现 {len(browser_urls)} 个职位链接")
+            except Exception as e:
+                logger.error(f"浏览器找岗失败，回退到 Tavily 通道: {e}")
+                browser_urls = []
+
+        logger.info("通道1：Tavily 搜索招聘页面...")
+        tavily_urls = await self.job_finder.find_job_portals(target_info)
+        logger.info(f"Tavily 通道发现 {len(tavily_urls)} 个招聘页面")
+
+        # 浏览器结果优先；保序去重
+        merged: List[str] = []
+        seen = set()
+        for u in browser_urls + tavily_urls:
+            if u and u not in seen:
+                seen.add(u)
+                merged.append(u)
+        return merged
 
     async def _batch_fetch_jd(self, urls: List[str]) -> Dict[str, str]:
         """批量抓取 JD 内容"""

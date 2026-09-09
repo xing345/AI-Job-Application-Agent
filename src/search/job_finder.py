@@ -7,7 +7,6 @@ import asyncio
 import re
 from typing import List, Optional
 from datetime import datetime
-import httpx
 from tavily import TavilyClient
 
 import sys
@@ -23,8 +22,8 @@ from src.models.instruction_schemas import TargetInstructionSchema
 class JobFinderConfig:
     """搜索器配置"""
     def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.client = TavilyClient(api_key=api_key)
+        self.api_key = api_key or ""
+        self._client = None  # 惰性创建, 避免空 key 时构造即报错
         self.timeout = 30
         self.max_results = 20
         self.supported_domains = [
@@ -36,6 +35,12 @@ class JobFinderConfig:
             "careers.smartrecruiters.com",
             "jobapply.novartis.com"
         ]
+
+    @property
+    def client(self) -> TavilyClient:
+        if self._client is None:
+            self._client = TavilyClient(api_key=self.api_key)
+        return self._client
 
 
 class JobSearchResult:
@@ -110,19 +115,21 @@ class JobFinder:
             return f"{' OR '.join(site_conditions)} {base_query}"
 
     async def _search_with_tavily(self, query: str) -> dict:
-        """使用 Tavily API 搜索"""
+        """使用 Tavily API 搜索（带 API key 鉴权；TavilyClient 为同步实现，用线程隔离避免阻塞事件循环）"""
         try:
-            # 异步 HTTP 请求
-            async with httpx.AsyncClient(timeout=self.config.timeout) as client:
-                response = await client.post(
-                    "https://api.tavily.com/search",
-                    json={
-                        "query": query,
-                        "max_results": self.config.max_results
-                    }
-                )
-                response.raise_for_status()
-                return response.json()
+            if not self.config.api_key:
+                print("未配置 TAVILY_API_KEY（请在 .env 中设置），已跳过 Tavily 搜索")
+                return {"results": []}
+
+            result = await asyncio.to_thread(
+                self.config.client.search,
+                query=query,
+                search_depth="basic",
+                max_results=self.config.max_results,
+                include_answer=False,
+                include_raw_content=False,
+            )
+            return result if isinstance(result, dict) else {"results": []}
 
         except Exception as e:
             print(f"Tavily API 搜索失败: {e}")
@@ -153,16 +160,17 @@ class JobFinder:
         if not any(domain in url for domain in self.config.supported_domains):
             return False
 
-        # 检查标题和描述中是否包含关键词
-        company_lower = target_info.company.lower()
-        role_lower = target_info.role.lower()
+        # 标题/描述/URL 中是否包含关键词（字段为空时不做该限定，避免公司名缺省导致必然过滤掉所有结果）
+        url_lower = url.lower()
+        company_lower = (target_info.company or "").strip().lower()
+        role_lower = (target_info.role or "").strip().lower()
 
-        # 必须包含公司名称
-        if company_lower not in title and company_lower not in description:
+        # 若指定了公司名，标题或描述必须出现（URL 命中公司域名也算）
+        if company_lower and company_lower not in title and company_lower not in description:
             return False
 
-        # 必须包含职位名称
-        if role_lower not in title and role_lower not in description:
+        # 若指定了职位名，标题/描述/URL 至少一处出现
+        if role_lower and role_lower not in title and role_lower not in description and role_lower not in url_lower:
             return False
 
         # 排除一些非招聘相关的页面

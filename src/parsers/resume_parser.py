@@ -16,8 +16,91 @@ from src.models.schemas import (
     ResumeSchema, WorkExperience, Education, ProjectExperience, EducationLevel,
 )
 
+
+# ---------------------------------------------------------------------------
+# 真实文本提取辅助函数（同步阻塞实现，通过 asyncio.to_thread 放到线程池执行）
+# ---------------------------------------------------------------------------
+def _extract_text_from_pdf_file(file_path: str) -> str:
+    """从 PDF 文件提取真实文本：优先 pdfplumber，无结果/失败时回退 PyPDF2。
+
+    Raises:
+        ValueError: 文本库缺失、文件无法读取、或 PDF 无文本层（扫描件/图片型 PDF）时抛出中文错误。
+    """
+    text = ""
+
+    # 第一优先：pdfplumber（对中文简历版面还原较好）
+    try:
+        import pdfplumber
+        pages = []
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    pages.append(page_text)
+        text = "\n".join(pages).strip()
+    except ImportError:
+        logger.warning("未安装 pdfplumber，将直接使用 PyPDF2 提取 PDF 文本")
+    except Exception as e:
+        logger.warning(f"pdfplumber 提取 PDF 文本失败，尝试回退 PyPDF2: {e}")
+
+    # 回退：PyPDF2
+    if not text:
+        try:
+            from PyPDF2 import PdfReader
+            reader = PdfReader(file_path)
+            pages = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    pages.append(page_text)
+            text = "\n".join(pages).strip()
+        except ImportError:
+            raise ValueError(
+                "无法提取 PDF 文本：未安装 pdfplumber 或 PyPDF2，请先执行 pip install -r requirements.txt"
+            ) from None
+        except Exception as e:
+            raise ValueError(f"无法读取 PDF 文件（可能已损坏或加密）: {e}") from e
+
+    if not text:
+        raise ValueError(
+            "无法从 PDF 中提取到任何文本内容：文件可能为扫描件或图片型 PDF，"
+            "请提供包含文本层的 PDF 简历"
+        )
+
+    return text
+
+
+def _read_text_file(file_path: str) -> str:
+    """读取 .txt 简历文本：优先 UTF-8，失败回退 GB18030（兼容常见中文编码）"""
+    with open(file_path, "rb") as f:
+        raw = f.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("gb18030", errors="replace")
+
+
+def _extract_text_from_docx_file(file_path: str) -> str:
+    """从 .docx 简历提取文本：读取段落与表格"""
+    try:
+        from docx import Document
+    except ImportError:
+        raise ValueError(
+            "解析 .docx 简历需要 python-docx，请先执行 pip install -r requirements.txt"
+        ) from None
+
+    doc = Document(file_path)
+    parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
 class MockPDFParser:
-    """模拟 PDF 解析器（用于测试）"""
+    """模拟 PDF 解析器（仅供显式调用 use_mock=True 时的测试工具，真实流程不使用）"""
 
     def __init__(self):
         self.logger = logger.bind(module="resume_parser")
@@ -56,17 +139,23 @@ class MockPDFParser:
 class ResumeParser:
     """简历解析器"""
 
-    def __init__(self, use_mock: bool = True):
+    def __init__(self, use_mock: bool = False):
+        """初始化简历解析器。
+
+        Args:
+            use_mock: 是否强制使用 MockPDFParser（仅供显式测试），
+                      默认 False 表示对真实文件做文本提取。
+        """
         self.logger = logger.bind(module="resume_parser")
         self.use_mock = use_mock
         self.pdf_parser = MockPDFParser() if use_mock else None
 
     async def parse_pdf(self, pdf_path: str) -> Optional[ResumeSchema]:
         """
-        解析 PDF 简历
+        解析简历文件
 
         Args:
-            pdf_path: PDF 文件路径
+            pdf_path: 简历文件路径（支持 .pdf / .txt / .docx）
 
         Returns:
             ResumeSchema: 解析后的简历数据，失败返回 None
@@ -79,18 +168,28 @@ class ResumeParser:
                 self.logger.error(f"简历文件不存在: {pdf_path}")
                 return None
 
-            # 提取文本
+            # 提取文本（use_mock=True 仅供显式测试；默认对真实文件做提取）
             if self.use_mock:
                 text = await self.pdf_parser.parse_text_from_pdf(pdf_path)
             else:
-                text = await self._extract_text_from_pdf(pdf_path)
+                text = await self._extract_text_from_file(pdf_path)
 
             if not text:
-                self.logger.error("无法从 PDF 提取文本")
+                self.logger.error(
+                    f"无法从简历文件中提取到任何文本内容: {pdf_path}（文件可能为空或格式不支持）"
+                )
                 return None
 
             # 解析简历结构
             resume_data = await self._parse_resume_structure(text)
+
+            # 身份信息缺失时明确失败（绝不回填虚构的姓名/邮箱去投递）
+            if not (resume_data.get("name") or "").strip() or not (resume_data.get("email") or "").strip():
+                self.logger.error(
+                    f"未能从简历中识别出姓名或邮箱: {pdf_path}。"
+                    "请提供包含清晰姓名与联系邮箱的简历文件，或先用 LLM 结构化解析。"
+                )
+                return None
 
             # 创建 Pydantic 模型
             resume = self._create_resume_schema(resume_data)
@@ -103,14 +202,21 @@ class ResumeParser:
             return None
 
     async def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """从 PDF 提取文本（实现版本）"""
-        try:
-            # 这里应该是实际的 PDF 解析逻辑
-            # 由于环境限制，返回空字符串
-            return ""
-        except Exception as e:
-            self.logger.error(f"提取 PDF 文本失败: {e}")
-            return ""
+        """从 PDF 文件提取真实文本（pdfplumber 优先，失败回退 PyPDF2）"""
+        return await asyncio.to_thread(_extract_text_from_pdf_file, pdf_path)
+
+    async def _extract_text_from_file(self, file_path: str) -> str:
+        """按扩展名提取简历文件文本：.pdf / .txt / .docx，其余格式抛出明确错误"""
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == ".pdf":
+            return await asyncio.to_thread(_extract_text_from_pdf_file, file_path)
+        if ext == ".txt":
+            return await asyncio.to_thread(_read_text_file, file_path)
+        if ext == ".docx":
+            return await asyncio.to_thread(_extract_text_from_docx_file, file_path)
+        raise ValueError(
+            f"暂不支持该简历文件格式: {ext or '（无扩展名）'}，目前仅支持 .pdf / .txt / .docx 简历文件"
+        )
 
     async def _parse_resume_structure(self, text: str) -> Dict[str, Any]:
         """解析简历结构"""
@@ -136,7 +242,7 @@ class ResumeParser:
         patterns = [
             r'姓名[：:]\s*([^\n]+)',
             r'名字[：:]\s*([^\n]+)',
-            r'^([^\n]{2,4})\n',  # 第一行可能是姓名
+            r'^\s*([^\n]{2,4})[ \t]*\n',  # 首行(允许缩进)可能是姓名
             r'([A-Za-z一-龥]{2,4})[，,]\s*电话',  # 姓名后跟电话
         ]
 
@@ -147,19 +253,20 @@ class ResumeParser:
                 if len(name) >= 2 and len(name) <= 20:
                     return name
 
-        return "张三"  # 默认返回测试姓名
+        # 识别不到姓名时返回空串（绝不用虚构姓名冒充真实简历）
+        return ""
 
     def _extract_phone(self, text: str) -> str:
         """提取电话号码"""
         phone_pattern = r'(1[3-9]\d{9})'  # 中国手机号
         match = re.search(phone_pattern, text)
-        return match.group(1) if match else "13800138000"
+        return match.group(1) if match else ""
 
     def _extract_email(self, text: str) -> str:
         """提取邮箱"""
         email_pattern = r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
         match = re.search(email_pattern, text)
-        return match.group(1) if match else "zhangsan@example.com"
+        return match.group(1) if match else ""
 
     def _extract_career_objective(self, text: str) -> str:
         """提取求职意向"""
@@ -176,8 +283,8 @@ class ResumeParser:
             if match:
                 return match.group(1).strip()
 
-        # 如果没有明确的求职意向，返回默认内容
-        return "寻求前端开发工程师职位，专注于 React 和 Vue 技术栈"
+        # 没有明确求职意向时返回空串，不再填充虚构文案
+        return ""
 
     def _extract_work_experience(self, text: str) -> List[Dict[str, str]]:
         """提取工作经历"""
@@ -412,8 +519,8 @@ class ResumeParser:
 
 # 导出函数
 async def parse_pdf(pdf_path: str) -> Optional[ResumeSchema]:
-    """解析 PDF 简历的便捷函数"""
-    parser = ResumeParser(use_mock=True)  # 使用模拟模式
+    """解析简历文件的便捷函数（真实提取模式，不使用模拟数据）"""
+    parser = ResumeParser(use_mock=False)
     return await parser.parse_pdf(pdf_path)
 
 

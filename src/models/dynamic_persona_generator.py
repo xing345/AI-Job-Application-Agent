@@ -30,6 +30,18 @@ class DynamicUserPersonaGenerator:
         self.llm_client = LLMClient(model=model)
         self.prompt_templates = self._load_prompt_templates()
 
+    def _render(self, template_name: str, **kwargs: str) -> str:
+        """
+        渲染提示模板: 用 .replace 替换 {占位符}。
+
+        不能用 str.format: 模板正文里含有 JSON 示例的花括号,
+        str.format 会把它们误当成字段占位符而抛 KeyError。
+        """
+        text = self.prompt_templates[template_name]
+        for key, value in kwargs.items():
+            text = text.replace("{" + key + "}", value)
+        return text
+
     def _load_prompt_templates(self) -> Dict[str, str]:
         """加载提示模板"""
         return {
@@ -206,6 +218,30 @@ class DynamicUserPersonaGenerator:
         """,
         }
 
+    @staticmethod
+    def _to_str_list(value) -> List[str]:
+        """
+        把 LLM 可能返回的 dict/list/None 归一为字符串列表。
+
+        场景: LLM 常把 strengths/motivators 等列表字段输出成
+        {"类别": ["内容"]} 之类的对象, 直接塞给 Pydantic 的 List[str] 会校验失败。
+        """
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [v for v in value if isinstance(v, str)]
+        if isinstance(value, dict):
+            out: List[str] = []
+            for v in value.values():
+                if isinstance(v, list):
+                    out.extend(x for x in v if isinstance(x, str))
+                elif isinstance(v, str):
+                    out.append(v)
+            return out
+        if isinstance(value, str):
+            return [value]
+        return []
+
     async def generate_persona(
         self,
         resume_path: str,
@@ -219,7 +255,10 @@ class DynamicUserPersonaGenerator:
         logger.info("解析简历文件...")
         resume_data = await parse_pdf(resume_path)
         if not resume_data:
-            raise ValueError("简历解析失败")
+            raise ValueError(
+                f"简历解析失败或缺少姓名/邮箱: {resume_path}。"
+                "请提供包含清晰姓名与联系邮箱的简历文件(.pdf/.docx/.txt)。"
+            )
 
         # 2. 构建简历信息字符串
         resume_info = self._format_resume_info(resume_data)
@@ -236,46 +275,32 @@ class DynamicUserPersonaGenerator:
 
         # 提取技能
         skill_extraction = await self.llm_client.generate_response(
-            self.prompt_templates["skill_extraction"].format(
-                resume_info=resume_info
-            ),
+            self._render("skill_extraction", resume_info=resume_info),
             json_output=True
         )
 
         # 分析职业目标
         career_analysis = await self.llm_client.generate_response(
-            self.prompt_templates["career_objective_analysis"].format(
-                resume_info=resume_info,
-                user_prompt=user_prompt
-            ),
+            self._render("career_objective_analysis", resume_info=resume_info, user_prompt=user_prompt),
             json_output=True
         )
 
         # 识别约束条件
         constraints_analysis = await self.llm_client.generate_response(
-            self.prompt_templates["constraints_identification"].format(
-                resume_info=resume_info,
-                user_prompt=user_prompt
-            ),
+            self._render("constraints_identification", resume_info=resume_info, user_prompt=user_prompt),
             json_output=True
         )
 
         # 分析性格特质
         personality_analysis = await self.llm_client.generate_response(
-            self.prompt_templates["personality_analysis"].format(
-                resume_info=resume_info,
-                user_prompt=user_prompt
-            ),
+            self._render("personality_analysis", resume_info=resume_info, user_prompt=user_prompt),
             json_output=True
         )
 
         # 5. 综合生成完整画像
         logger.info("综合生成完整用户画像...")
         persona_response = await self.llm_client.generate_response(
-            self.prompt_templates["persona_generation"].format(
-                resume_info=resume_info,
-                user_prompt=user_prompt
-            ),
+            self._render("persona_generation", resume_info=resume_info, user_prompt=user_prompt),
             json_output=True
         )
 
@@ -289,22 +314,26 @@ class DynamicUserPersonaGenerator:
         )
 
         # 7. 创建最终的用户画像对象
+        # technical_skills 契约: dict[类别 -> 技能列表]; LLM 未返回时给空 dict
+        technical_skills = validated_persona.get("technical_skills", {}) or {}
+        if not isinstance(technical_skills, dict):
+            technical_skills = {}
         user_persona = DynamicUserPersona(
             name=resume_data.name,
             email=resume_data.email,
             phone=resume_data.phone,
-            technical_skills=validated_persona.get("technical_skills", []),
-            soft_skills=SoftSkills(**validated_persona.get("soft_skills", {})),
-            domain_knowledge=validated_persona.get("domain_knowledge", {}),
-            career_objective=CareerObjective(**validated_persona.get("career_objective", {})),
-            personality_traits=PersonalityTraits(**validated_persona.get("personality_traits", {})),
-            constraints=CareerConstraints(**validated_persona.get("constraints", {})),
-            work_preferences=validated_persona.get("work_preferences", {}),
-            motivators=validated_persona.get("motivators", []),
-            deal_breakers=validated_persona.get("deal_breakers", []),
-            strengths=validated_persona.get("strengths", []),
-            weaknesses=validated_persona.get("weaknesses", []),
-            ideal_work_environment=validated_persona.get("ideal_work_environment", []),
+            technical_skills=technical_skills,
+            soft_skills=SoftSkills(**(validated_persona.get("soft_skills") or {})),
+            domain_knowledge=validated_persona.get("domain_knowledge") or {},
+            career_objective=CareerObjective(**(validated_persona.get("career_objective") or {})),
+            personality_traits=PersonalityTraits(**(validated_persona.get("personality_traits") or {})),
+            constraints=CareerConstraints(**(validated_persona.get("constraints") or {})),
+            work_preferences=validated_persona.get("work_preferences") or {},
+            motivators=self._to_str_list(validated_persona.get("motivators", [])),
+            deal_breakers=self._to_str_list(validated_persona.get("deal_breakers", [])),
+            strengths=self._to_str_list(validated_persona.get("strengths", [])),
+            weaknesses=self._to_str_list(validated_persona.get("weaknesses", [])),
+            ideal_work_environment=self._to_str_list(validated_persona.get("ideal_work_environment", [])),
             confidence_score=validated_persona.get("confidence_score", 0.8),
             version="2.0"
         )

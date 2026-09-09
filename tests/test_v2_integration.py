@@ -5,6 +5,7 @@ v2.0 完整集成测试
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -309,12 +310,14 @@ async def test_phase8_smart_matching():
         # 创建匹配引擎
         engine = SmartMatchingEngine()
 
-        # 批量匹配
-        high_quality, normal_quality = await engine.batch_match_jobs(
+        # 批量匹配（batch_match_jobs 返回单个结果列表, 按分数归类高低质量）
+        results = await engine.batch_match_jobs(
             persona,
             jobs,
             max_concurrent=3
         )
+        high_quality = [r for r in results if r.match_score >= 70]
+        normal_quality = [r for r in results if r.match_score < 70]
 
         print(f"\n✅ 匹配完成！")
         print(f"   高质量职位: {len(high_quality)} 个")

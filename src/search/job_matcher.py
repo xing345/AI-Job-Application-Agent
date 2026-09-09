@@ -10,7 +10,7 @@ from typing import List, Optional
 from playwright.async_api import async_playwright
 from pydantic import BaseModel, Field, HttpUrl
 from loguru import logger
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 import sys
 import os
@@ -51,11 +51,12 @@ class JobMatcherConfig:
         )
         self.base_url = base_url or llm_cfg.get("base_url") or os.getenv("OPENAI_BASE_URL") or None
         self.model = model or llm_cfg.get("model") or os.getenv("OPENAI_MODEL") or "gpt-4o"
+        # 使用异步客户端: _llm_evaluate 在 async 方法中 await, 不能用同步 OpenAI 客户端
         self.llm_client = (
-            OpenAI(api_key=self.openai_api_key, base_url=self.base_url)
+            AsyncOpenAI(api_key=self.openai_api_key, base_url=self.base_url)
             if self.openai_api_key else None
         )
-        self.playwright_timeout = 30
+        self.playwright_timeout = 30000  # 毫秒（原 30 会导致所有 JD 抓取 30ms 超时）
         self.retry_attempts = 3
 
 

@@ -46,11 +46,19 @@ class JobSearcher:
             or None
         )
 
+        search_cfg = config.get("search") or {}
+        browser_cfg = config.get("browser") or {}
+        use_browser = bool(search_cfg.get("use_browser", True))
+        browser_headless = bool(browser_cfg.get("headless", True))
+
         self.pipeline = SearchPipeline(
             self.tavily_api_key,
             self.openai_api_key,
             base_url=self.base_url,
             model=self.llm_model,
+            use_browser=use_browser,
+            headless=browser_headless,
+            interactive=True,
         )
 
     async def search_jobs(self, persona) -> List[Dict]:
@@ -85,11 +93,33 @@ class JobSearcher:
         return jobs
 
     def _build_search_inputs(self, persona) -> tuple:
-        """把用户画像转换为搜索管道需要的输入"""
-        objective = persona.career_objective
-        target_positions = objective.target_positions or ["软件工程师"]
-        locations = objective.location_preference or []
-        skills = list(persona.technical_skills or [])
+        """把用户画像转换为搜索管道需要的输入（兼容 DynamicUserPersona 模型与 dict）"""
+        if isinstance(persona, dict):
+            name = persona.get("name") or ""
+            email = persona.get("email") or ""
+            phone = persona.get("phone")
+            objective = persona.get("career_objective") or {}
+            target_positions = objective.get("target_positions") or ["软件工程师"]
+            locations = objective.get("location_preference") or []
+            raw_skills = persona.get("technical_skills") or {}
+        else:
+            name = persona.name
+            email = persona.email
+            phone = persona.phone
+            objective = persona.career_objective
+            target_positions = objective.target_positions or ["软件工程师"]
+            locations = objective.location_preference or []
+            raw_skills = persona.technical_skills or {}
+
+        # technical_skills 契约: dict[类别 -> 技能列表]; 兼容旧 list 数据
+        if isinstance(raw_skills, dict):
+            skills = [
+                s for values in raw_skills.values()
+                for s in (values or []) if isinstance(s, str)
+            ]
+        else:
+            skills = [s for s in raw_skills if isinstance(s, str)]
+        skills = list(dict.fromkeys(skills))
 
         target_info = TargetInstructionSchema(
             company="",  # 未指定公司，全局搜索
@@ -99,9 +129,9 @@ class JobSearcher:
         )
 
         resume = ResumeSchema(
-            name=persona.name,
-            email=persona.email,
-            phone=persona.phone,
+            name=name,
+            email=email,
+            phone=phone,
             summary=f"求职目标: {'、'.join(target_positions)}",
             skills=skills,
             work_experience=[],

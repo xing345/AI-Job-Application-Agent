@@ -7,6 +7,7 @@ AI Job Agent v2.0 启动脚本
 import asyncio
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from loguru import logger
@@ -18,7 +19,47 @@ import traceback
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# 加载 .env（密钥环境变量优先于 config.json）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(project_root / ".env")
+    load_dotenv()
+except ImportError:
+    logger.warning("python-dotenv 未安装，.env 将不会被加载")
+
 from src.orchestrator.agent_orchestrator import AgentOrchestrator
+
+
+def _apply_env_overrides(config: dict) -> dict:
+    """用环境变量覆盖 config（密钥应从 .env 提供，config.json 不再存明文密钥）"""
+    llm_env = {
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "model": os.getenv("OPENAI_MODEL"),
+        "base_url": os.getenv("OPENAI_BASE_URL"),
+    }
+    tavily_env = os.getenv("TAVILY_API_KEY")
+    email_env = {
+        "server": os.getenv("EMAIL_SERVER"),
+        "username": os.getenv("EMAIL_USERNAME"),
+        "password": os.getenv("EMAIL_PASSWORD"),
+    }
+
+    if config.get("llm") is None:
+        config["llm"] = {}
+    for key, value in llm_env.items():
+        if value:
+            config["llm"][key] = value
+
+    if tavily_env:
+        config["tavily_api_key"] = tavily_env
+
+    if config.get("email") is None:
+        config["email"] = {}
+    for key, value in email_env.items():
+        if value:
+            config["email"][key] = value
+
+    return config
 
 
 class AgentConsole:
@@ -27,6 +68,7 @@ class AgentConsole:
     def __init__(self):
         self.agent = None
         self.running = False
+        self._dashboard_proc = None
 
     async def initialize(self):
         """初始化控制台"""
@@ -56,6 +98,9 @@ class AgentConsole:
                 logger.info(f"已加载配置文件: {config_file}")
             except Exception as e:
                 logger.warning(f"配置文件加载失败: {e}")
+
+        # 环境变量（.env）中的密钥覆盖 config.json
+        config = _apply_env_overrides(config)
 
         # 创建Agent（构造函数非异步）
         agent = AgentOrchestrator(config)
@@ -274,9 +319,16 @@ class AgentConsole:
             # 显示申请结果
             if task_id in self.agent.current_tasks:
                 task_data = self.agent.current_tasks[task_id]['data']
+                filled_jobs = task_data.get('filled_jobs', [])
                 print(f"\n📊 申请结果:")
-                print(f"  成功申请: {len(task_data['applied_jobs'])}")
+                print(f"  已提交申请: {len(task_data['applied_jobs'])}")
+                print(f"  已填写待人工提交: {len(filled_jobs)}")
                 print(f"  申请失败: {len(task_data['failed_jobs'])}")
+
+                if filled_jobs:
+                    print("\n⚠️ 以下职位表单已填好，请在浏览器中人工核对并点击提交:")
+                    for job in filled_jobs[:5]:
+                        print(f"  {job['url']}")
 
                 if task_data['failed_jobs']:
                     print("\n❌ 失败的申请:")
@@ -293,7 +345,7 @@ class AgentConsole:
             return
 
         try:
-            # 检查简历文件
+            # 检查简历文件: 默认目录 data/ 下的 resume.*, 也支持 config paths.resume
             resume_paths = [
                 project_root / "data" / "resume.pdf",
                 project_root / "data" / "resume.docx",
@@ -307,9 +359,18 @@ class AgentConsole:
                     break
 
             if not resume_path:
-                print("❌ 未找到简历文件")
-                print("请将简历文件放在 data/ 目录下，支持 .pdf, .docx, .txt 格式")
-                return
+                # 允许用户直接输入简历路径
+                user_path = input("未在 data/ 下找到简历，请输入简历文件路径（.pdf/.docx/.txt，直接回车退出）: ").strip()
+                if not user_path:
+                    print("❌ 未提供简历文件")
+                    return
+                candidate = Path(user_path)
+                if not candidate.exists():
+                    print(f"❌ 文件不存在: {candidate}")
+                    return
+                resume_path = candidate
+
+            print(f"📄 使用简历: {resume_path}")
 
             print("👤 创建用户画像...")
             user_prompt = input("请输入您的职业目标和偏好（如: 我想找React开发工作，薪资15-20K...）: ")
@@ -341,23 +402,33 @@ class AgentConsole:
     async def _start_dashboard(self):
         """启动Dashboard"""
         print("📊 启动监控Dashboard...")
-        print("将在浏览器中打开Dashboard界面...")
-        print("输入 'stop' 关闭Dashboard")
 
-        # 导入并启动Dashboard
+        dashboard_script = project_root / "src" / "dashboard" / "app.py"
+        if not dashboard_script.exists():
+            print(f"❌ Dashboard 脚本不存在: {dashboard_script}")
+            return
+
+        # 正确的启动方式是 `streamlit run src/dashboard/app.py`
+        # （直接在 Python 线程里 import 该模块只会执行裸 st.* 调用, 并不会起服务）
+        python_exe = project_root / ".venv" / "Scripts" / "python.exe"
+        executable = str(python_exe) if python_exe.exists() else sys.executable
+
         try:
-            from src.dashboard.app import main as dashboard_main
-
-            # 在单独的线程中运行Dashboard
-            import threading
-            dashboard_thread = threading.Thread(target=dashboard_main)
-            dashboard_thread.daemon = True
-            dashboard_thread.start()
-
-            print("✅ Dashboard已启动，请打开浏览器访问: http://localhost:8501")
-
+            import subprocess
+            proc = subprocess.Popen(
+                [
+                    executable, "-m", "streamlit", "run",
+                    str(dashboard_script),
+                    "--server.headless", "true",
+                ],
+                cwd=str(project_root),
+            )
+            self._dashboard_proc = proc
+            print("✅ Dashboard 服务已启动，请访问: http://localhost:8501")
+            print("   （提示: 输入 'exit' 退出时会将 Dashboard 一并关闭）")
         except Exception as e:
             print(f"❌ 启动Dashboard失败: {e}")
+            print("   可手动运行: streamlit run src/dashboard/app.py")
 
     async def _show_learning(self):
         """显示学习洞察"""
@@ -419,6 +490,14 @@ class AgentConsole:
                 await self.agent.stop()
             except Exception as e:
                 print(f"停止时出错: {e}")
+
+        # 关闭 Dashboard 子进程（若启动过）
+        if self._dashboard_proc is not None and self._dashboard_proc.poll() is None:
+            print("正在关闭Dashboard...")
+            try:
+                self._dashboard_proc.terminate()
+            except Exception as e:
+                print(f"关闭Dashboard时出错: {e}")
 
         self.running = False
 

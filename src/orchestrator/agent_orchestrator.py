@@ -21,6 +21,7 @@ sys.path.insert(0, project_root)
 from src.reflection.self_reflection_system import SelfReflectionSystem
 from src.email.email_listener import EmailListener
 from src.models.dynamic_persona_generator import DynamicUserPersonaGenerator
+from src.models.schemas import DynamicUserPersona
 from src.search.job_searcher import JobSearcher
 from src.matching.matching_engine import SmartMatchingEngine
 from src.browser.browser_agent import BrowserAgent
@@ -67,6 +68,7 @@ class AgentOrchestrator:
             'search': {
                 'interval_hours': 24,
                 'max_results_per_search': 50,
+                'use_browser': True,
                 'sources': ['linkedin', 'indeed', 'bosszhipin']
             },
             'matching': {
@@ -101,11 +103,11 @@ class AgentOrchestrator:
             data_dir = Path(self.db_path).parent
             data_dir.mkdir(parents=True, exist_ok=True)
 
-            # 初始化各模块
-            await self._initialize_modules()
-
-            # 加载之前的用户画像（如果存在）
+            # 先加载用户画像（邮箱监听器等模块依赖画像存在与否来决定是否启用）
             await self._load_user_persona()
+
+            # 再初始化各模块
+            await self._initialize_modules()
 
             logger.info("Agent Orchestrator初始化完成")
 
@@ -158,26 +160,39 @@ class AgentOrchestrator:
             config=email_config
         )
 
-    async def _create_email_listener(self, user_persona: Dict, config: Dict):
+    async def _create_email_listener(self, user_persona: Any, config: Dict):
         """创建邮箱监听器"""
-        # 这里需要真实的邮箱配置
+        # 需要真实的 IMAP 凭据（来自 .env 的 EMAIL_USERNAME / EMAIL_PASSWORD）。
+        # 缺失时绝不伪造 test@example.com 去连接真实 IMAP 服务器。
         if not config.get('username') or not config.get('password'):
-            logger.warning("邮箱配置不完整，邮箱监听器将使用测试模式")
-            # 使用测试配置
-            config['username'] = 'test@example.com'
-            config['password'] = 'test_password'
+            logger.warning(
+                "邮箱凭据缺失: 请在 .env 中配置 EMAIL_SERVER / EMAIL_USERNAME / EMAIL_PASSWORD "
+                "（或 config.json 的 email 段）后重启，以启用邮箱监听"
+            )
+            return None
 
         from src.email.email_listener import create_email_listener
+        # EmailListener 按 dict 使用画像数据
+        if hasattr(user_persona, "model_dump"):
+            user_persona = user_persona.model_dump(mode="json")
         return await create_email_listener(user_persona, config)
 
     async def _load_user_persona(self):
-        """加载用户画像"""
+        """加载用户画像（统一为 DynamicUserPersona 模型，损坏/旧版数据给出明确指引）"""
         try:
             db_path = Path(project_root) / "data" / "user_persona.json"
             if db_path.exists():
                 with open(db_path, 'r', encoding='utf-8') as f:
-                    self.user_persona = json.load(f)
-                logger.info(f"已加载用户画像: {self.user_persona.get('name', 'Unknown')}")
+                    raw = json.load(f)
+                # 画像持久化为完整模型数据时可直接还原; 版本不匹配时提示重新生成
+                try:
+                    self.user_persona = DynamicUserPersona.model_validate(raw)
+                    logger.info(f"已加载用户画像: {self.user_persona.name}")
+                except Exception as ve:
+                    self.user_persona = None
+                    logger.error(
+                        f"用户画像数据与当前版本不兼容（{ve}）。请先运行 persona 重新生成画像。"
+                    )
             else:
                 # 如果没有现有画像，需要先生成
                 logger.info("未找到现有用户画像，需要先生成")
@@ -209,9 +224,16 @@ class AgentOrchestrator:
 
             logger.info("用户画像生成完成")
 
-            # 如果邮箱监听器已初始化，更新监听器
+            # 画像就绪后，若邮箱监听未启用则尝试补建（此前因缺少画像被跳过）
+            if self.config.get('email', {}).get('enabled') and self.email_listener is None:
+                await self._initialize_email_listener()
+
+            # 若邮箱监听器已存在，用新画像更新它
             if self.email_listener and self.user_persona:
-                await self.email_listener.initialize(self.user_persona)
+                persona_dict = self.user_persona
+                if hasattr(persona_dict, "model_dump"):
+                    persona_dict = persona_dict.model_dump(mode="json")
+                await self.email_listener.initialize(persona_dict)
 
         except Exception as e:
             logger.error(f"生成用户画像失败: {e}")
@@ -280,8 +302,18 @@ class AgentOrchestrator:
         """启动求职工作流"""
         logger.info("启动求职工作流...")
 
-        if not self.user_persona:
-            logger.error("用户画像尚未生成")
+        # 画像统一为 DynamicUserPersona 模型（搜索器/匹配引擎均按模型属性读取）
+        persona = self.user_persona
+        if isinstance(persona, dict):
+            try:
+                persona = DynamicUserPersona.model_validate(persona)
+                self.user_persona = persona
+            except Exception as e:
+                logger.error(f"用户画像数据不完整，无法用于搜索: {e}")
+                return
+
+        if not persona:
+            logger.error("用户画像尚未生成，请先运行 persona")
             return
 
         try:
@@ -296,7 +328,7 @@ class AgentOrchestrator:
 
             # 执行搜索
             logger.info("开始搜索职位...")
-            jobs = await self.job_searcher.search_jobs(self.user_persona)
+            jobs = await self.job_searcher.search_jobs(persona)
 
             # 更新任务状态
             self.current_tasks[task_id]['data']['found_jobs'] = len(jobs)
@@ -307,7 +339,7 @@ class AgentOrchestrator:
             matching_results = []
             for job in jobs:
                 match_result = await self.matching_engine.match_persona_with_job(
-                    persona=self.user_persona,
+                    persona=persona,
                     job_description=job.get("description", "") if isinstance(job, dict) else str(job),
                     job_url=job.get("url") if isinstance(job, dict) else None
                 )
@@ -377,18 +409,18 @@ class AgentOrchestrator:
                     )
 
                     if result['success']:
-                        # 更新任务数据
-                        self.current_tasks[task_id]['data']['applied_jobs'].append({
-                            'url': url,
-                            'result': result
-                        })
-                        self.agent_metrics['total_applications'] += 1
-
-                        # 如果提交成功
-                        if result.get('submitted', False):
+                        # 区分"已填写待人工提交"与"真正提交"：绝不在未提交时虚报申请数
+                        submitted = bool(result.get('submitted', False))
+                        record = {'url': url, 'result': result, 'submitted': submitted}
+                        if submitted:
+                            self.current_tasks[task_id]['data']['applied_jobs'].append(record)
+                            self.agent_metrics['total_applications'] += 1
                             self.agent_metrics['successful_submissions'] += 1
-
-                        logger.info(f"✅ 成功申请: {url}")
+                            logger.info(f"✅ 已提交申请: {url}")
+                        else:
+                            filled_list = self.current_tasks[task_id]['data'].setdefault('filled_jobs', [])
+                            filled_list.append(record)
+                            logger.info(f"✅ 表单已填写完成(待人工核对并手动提交): {url}")
                     else:
                         # 记录失败
                         self.current_tasks[task_id]['data']['failed_jobs'].append({
@@ -952,6 +984,7 @@ DEFAULT_AGENT_CONFIG = {
     'search': {
         'interval_hours': 24,
         'max_results_per_search': 50,
+        'use_browser': True,
         'sources': ['linkedin', 'indeed', 'bosszhipin']
     },
     'matching': {
