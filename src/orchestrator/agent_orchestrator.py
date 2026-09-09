@@ -69,6 +69,9 @@ class AgentOrchestrator:
                 'interval_hours': 24,
                 'max_results_per_search': 50,
                 'use_browser': True,
+                'use_company_sites': True,
+                'max_companies': 5,
+                'target_companies': [],
                 'sources': ['linkedin', 'indeed', 'bosszhipin']
             },
             'matching': {

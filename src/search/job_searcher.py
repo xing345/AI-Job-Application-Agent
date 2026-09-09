@@ -49,6 +49,9 @@ class JobSearcher:
         search_cfg = config.get("search") or {}
         browser_cfg = config.get("browser") or {}
         use_browser = bool(search_cfg.get("use_browser", True))
+        use_company_sites = bool(search_cfg.get("use_company_sites", True))
+        max_companies = int(search_cfg.get("max_companies", 5))
+        target_companies = search_cfg.get("target_companies") or None
         browser_headless = bool(browser_cfg.get("headless", True))
 
         self.pipeline = SearchPipeline(
@@ -59,6 +62,9 @@ class JobSearcher:
             use_browser=use_browser,
             headless=browser_headless,
             interactive=True,
+            use_company_sites=use_company_sites,
+            max_companies=max_companies,
+            target_companies=target_companies,
         )
 
     async def search_jobs(self, persona) -> List[Dict]:

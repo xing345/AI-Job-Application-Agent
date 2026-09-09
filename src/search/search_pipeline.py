@@ -64,7 +64,10 @@ class SearchPipeline:
         model: str = None,
         use_browser: bool = True,
         headless: bool = True,
-        interactive: bool = True
+        interactive: bool = True,
+        use_company_sites: bool = True,
+        max_companies: int = 5,
+        target_companies: List[str] = None
     ):
         # 初始化组件
         self.job_finder = JobFinder(JobFinderConfig(api_key=tavily_api_key))
@@ -74,11 +77,16 @@ class SearchPipeline:
 
         # 真实浏览器职位发现器（方案B：开浏览器遍历招聘站抽取职位链接）
         self.use_browser = use_browser
+        # 公司自有招聘官网通道
+        self.use_company_sites = use_company_sites and use_browser
+        self.target_companies = target_companies or None
+        self.max_companies = max_companies
         self.browser_finder = (
             BrowserJobFinder(
                 tavily_api_key=tavily_api_key,
                 headless=headless,
                 interactive=interactive,
+                max_companies=max_companies,
             )
             if use_browser else None
         )
@@ -144,6 +152,20 @@ class SearchPipeline:
         - 通道2（方案B）：真实浏览器打开招聘门户，DOM 抽取职位详情链接
         浏览器结果优先，去重合并后返回。
         """
+        # 通道0：进入公司自有招聘官网找岗
+        company_urls: List[str] = []
+        if self.use_company_sites and self.browser_finder:
+            logger.info("通道0：进入公司自有招聘官网找岗...")
+            try:
+                company_jobs = await self.browser_finder.discover_company_careers(
+                    target_info, known_companies=self.target_companies
+                )
+                company_urls = [j["url"] for j in company_jobs if j.get("url")]
+                logger.info(f"公司官网通道发现 {len(company_urls)} 个职位链接")
+            except Exception as e:
+                logger.error(f"公司官网通道失败，继续后续通道: {e}")
+                company_urls = []
+
         browser_urls: List[str] = []
         if self.use_browser and self.browser_finder:
             logger.info("通道2：真实浏览器遍历招聘站找岗...")
@@ -162,7 +184,7 @@ class SearchPipeline:
         # 浏览器结果优先；保序去重
         merged: List[str] = []
         seen = set()
-        for u in browser_urls + tavily_urls:
+        for u in company_urls + browser_urls + tavily_urls:
             if u and u not in seen:
                 seen.add(u)
                 merged.append(u)
