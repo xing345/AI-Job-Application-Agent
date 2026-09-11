@@ -5,7 +5,7 @@
 
 import asyncio
 import time
-from typing import List, Dict, Any
+from typing import List, Dict
 from dataclasses import dataclass
 from loguru import logger
 
@@ -30,6 +30,9 @@ class SearchResult:
     title: str
     match_result: MatchResultSchema
     matched_at: float
+    # 是否达到了本轮的最低分门槛。False 表示这是「降级返回」的结果：
+    # 一个达标的都没有时，宁可把最接近的几个岗位标出来，也不返回空列表
+    above_threshold: bool = True
 
     @property
     def is_qualified(self) -> bool:
@@ -81,6 +84,7 @@ class SearchPipeline:
         self.use_company_sites = use_company_sites and use_browser
         self.target_companies = target_companies or None
         self.max_companies = max_companies
+        self.jd_concurrency = 5  # JD 抓取并发上限
         self.browser_finder = (
             BrowserJobFinder(
                 tavily_api_key=tavily_api_key,
@@ -93,6 +97,13 @@ class SearchPipeline:
 
         # 配置日志
         logger.add("search_pipeline.log", rotation="10 MB")
+
+    def set_target_companies(self, companies: List[str] = None) -> None:
+        """运行时更新目标公司名单（搜索前用户指定），无需重建整条管道"""
+        self.target_companies = [c for c in (companies or []) if c and c.strip()] or None
+        logger.info(
+            f"目标公司已更新: {self.target_companies or '不限（按岗位自动发现）'}"
+        )
 
     async def run_search_pipeline(
         self,
@@ -118,118 +129,148 @@ class SearchPipeline:
 
         # 第一阶段：搜索职位
         logger.info("第一阶段：搜索职位...")
-        job_urls = await self._discover_job_urls(target_info)
-        logger.info(f"找到 {len(job_urls)} 个招聘页面")
+        job_items = await self._discover_job_urls(target_info)
+        logger.info(f"找到 {len(job_items)} 个招聘页面")
 
-        if not job_urls:
+        if not job_items:
             logger.warning("未找到任何招聘页面")
             return []
 
+        # 每个通道各发现了多少，出问题时能一眼看出卡在哪
+        self._log_channel_stats(job_items)
+
         # 第二阶段：抓取 JD
         logger.info("第二阶段：抓取 JD 内容...")
-        jd_results = await self._batch_fetch_jd(job_urls[:20])  # 限制抓取数量
+        fetch_items = job_items[:20]  # 限制抓取数量
+        jd_results = await self._batch_fetch_jd(fetch_items)
 
         # 第三阶段：匹配评估
         logger.info("第三阶段：进行匹配评估...")
-        match_results = await self._batch_evaluate_match(
-            {url: jd for url, jd in jd_results.items() if jd},
-            resume
-        )
+        match_results = await self._batch_evaluate_match(jd_results, resume, fetch_items)
+
+        if not match_results:
+            logger.warning("所有候选页面均无法评估（抓取失败且无标题可用）")
+            return []
 
         # 第四阶段：筛选和排序
         logger.info("第四阶段：筛选和排序结果...")
         final_results = self._filter_and_sort_results(match_results, min_score, max_results)
 
         end_time = time.time()
-        logger.info(f"搜索管道完成，耗时: {end_time - start_time:.2f} 秒")
+        logger.info(
+            f"搜索管道完成，耗时: {end_time - start_time:.2f} 秒，"
+            f"评估 {len(match_results)} 个岗位，返回 {len(final_results)} 个"
+            f"（其中 {sum(1 for r in final_results if not r.above_threshold)} 个未达门槛）"
+        )
 
         return final_results
 
-    async def _discover_job_urls(self, target_info: TargetInstructionSchema) -> List[str]:
+    @staticmethod
+    def _log_channel_stats(job_items: List[Dict]) -> None:
+        """按通道统计发现数量，便于定位「搜不到」卡在哪一步"""
+        stats: Dict[str, int] = {}
+        for item in job_items:
+            channel = item.get("channel") or "unknown"
+            stats[channel] = stats.get(channel, 0) + 1
+        if stats:
+            detail = "、".join(f"{k}={v}" for k, v in stats.items())
+            logger.info(f"各通道发现职位数: {detail}")
+
+    async def _discover_job_urls(self, target_info: TargetInstructionSchema) -> List[Dict]:
         """
-        第一阶段双通道职位发现：
-        - 通道1（原有）：Tavily 限定海外 ATS 域名
-        - 通道2（方案B）：真实浏览器打开招聘门户，DOM 抽取职位详情链接
-        浏览器结果优先，去重合并后返回。
+        三通道职位发现：通道0 公司自有招聘官网 / 通道2 浏览器招聘门户 / 通道1 Tavily
+
+        Returns:
+            [{"url", "title", "company", "channel"}]，保序去重（公司官网优先）。
+            保留标题是为了在后面对 JD 抓取失败时还能用标题兜底评估，而不是直接丢弃岗位。
         """
+        merged: List[Dict] = []
+        seen = set()
+
+        def merge(items: List[Dict], channel: str):
+            for item in items or []:
+                url = (item or {}).get("url")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                item.setdefault("channel", channel)
+                merged.append(item)
+
         # 通道0：进入公司自有招聘官网找岗
-        company_urls: List[str] = []
         if self.use_company_sites and self.browser_finder:
             logger.info("通道0：进入公司自有招聘官网找岗...")
             try:
                 company_jobs = await self.browser_finder.discover_company_careers(
                     target_info, known_companies=self.target_companies
                 )
-                company_urls = [j["url"] for j in company_jobs if j.get("url")]
-                logger.info(f"公司官网通道发现 {len(company_urls)} 个职位链接")
+                merge(company_jobs, "company_site")
+                logger.info(f"公司官网通道发现 {len(company_jobs)} 个职位链接")
             except Exception as e:
                 logger.error(f"公司官网通道失败，继续后续通道: {e}")
-                company_urls = []
 
-        browser_urls: List[str] = []
+        # 通道2：真实浏览器遍历招聘站
         if self.use_browser and self.browser_finder:
             logger.info("通道2：真实浏览器遍历招聘站找岗...")
             try:
                 browser_jobs = await self.browser_finder.discover(target_info)
-                browser_urls = [j["url"] for j in browser_jobs if j.get("url")]
-                logger.info(f"浏览器通道发现 {len(browser_urls)} 个职位链接")
+                merge(browser_jobs, "job_portal")
+                logger.info(f"浏览器通道发现 {len(browser_jobs)} 个职位链接")
             except Exception as e:
                 logger.error(f"浏览器找岗失败，回退到 Tavily 通道: {e}")
-                browser_urls = []
 
+        # 通道1：Tavily 搜索
         logger.info("通道1：Tavily 搜索招聘页面...")
         tavily_urls = await self.job_finder.find_job_portals(target_info)
+        merge([{"url": u, "title": "", "company": ""} for u in tavily_urls], "tavily")
         logger.info(f"Tavily 通道发现 {len(tavily_urls)} 个招聘页面")
 
-        # 浏览器结果优先；保序去重
-        merged: List[str] = []
-        seen = set()
-        for u in company_urls + browser_urls + tavily_urls:
-            if u and u not in seen:
-                seen.add(u)
-                merged.append(u)
         return merged
 
-    async def _batch_fetch_jd(self, urls: List[str]) -> Dict[str, str]:
-        """批量抓取 JD 内容"""
-        from concurrent.futures import ThreadPoolExecutor
+    async def _batch_fetch_jd(self, items: List[Dict]) -> Dict[str, str]:
+        """
+        批量抓取 JD 内容
 
-        jd_results = {}
+        交给 JobMatcher 的批量接口，复用同一个浏览器实例并限制并发；
+        抓取失败的返回空串，由 _batch_evaluate_match 用职位标题兜底。
+        """
+        urls = [it["url"] for it in items if it.get("url")]
+        if not urls:
+            return {}
+        return await self.job_matcher.fetch_jd_texts(
+            urls, concurrency=self.jd_concurrency
+        )
 
-        async def fetch_single_jd(url: str):
-            logger.debug(f"正在抓取 JD: {url}")
-            jd_text = await self.job_matcher.fetch_jd_text(url)
-            return url, jd_text
-
-        # 使用并发抓取提高效率
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            loop = asyncio.get_event_loop()
-            tasks = []
-            for url in urls:
-                task = loop.run_in_executor(executor, lambda u: asyncio.run(fetch_single_jd(u)), url)
-                tasks.append(task)
-
-            results = await asyncio.gather(*tasks)
-
-        for url, jd_text in results:
-            jd_results[url] = jd_text
-
-        return jd_results
+    @staticmethod
+    def _weak_jd(title: str, url: str) -> str:
+        """JD 抓取失败时的兜底文本：至少让真实岗位带着标题进入评估"""
+        if not title:
+            return ""
+        return (
+            f"职位名称: {title}\n来源链接: {url}\n"
+            "（未能抓取到职位正文，仅依据标题判断岗位相关性）"
+        )
 
     async def _batch_evaluate_match(
         self,
         jd_data: Dict[str, str],
-        resume: ResumeSchema
+        resume: ResumeSchema,
+        items: List[Dict] = None,
     ) -> Dict[str, MatchResultSchema]:
-        """批量进行匹配评估"""
-        match_results = {}
+        """批量进行匹配评估（JD 过短/抓取失败时回退用职位标题，不再直接丢掉岗位）"""
+        titles = {
+            it["url"]: (it.get("title") or "")
+            for it in (items or []) if it.get("url")
+        }
 
-        # 使用并发评估提高效率
+        match_results = {}
         tasks = []
         for url, jd_text in jd_data.items():
-            if jd_text and len(jd_text) > 100:  # 只评估有效的 JD
-                task = self._evaluate_single_match(url, resume, jd_text)
-                tasks.append(task)
+            text = jd_text if (jd_text and len(jd_text) > 100) else \
+                self._weak_jd(titles.get(url, ""), url)
+            if not text:
+                logger.debug(f"跳过无法评估的页面（无 JD 且无标题）: {url}")
+                continue
+            tasks.append(self._evaluate_single_match(url, resume, text))
 
         if tasks:
             results = await asyncio.gather(*tasks)
@@ -255,7 +296,13 @@ class SearchPipeline:
         min_score: int,
         max_results: int
     ) -> List[SearchResult]:
-        """筛选和排序结果"""
+        """
+        筛选和排序结果
+
+        达标结果照常返回；若一个达标的都没有，则降级返回分数最高的 Top-N 并标
+        above_threshold=False —— 用户需要看到「最接近的几个岗位 + 实际分数」，
+        而不是一个空列表（空列表无法区分「没抓到」和「抓到了但都不合适」）。
+        """
         # 转换为 SearchResult 对象
         search_results = []
         for url, match_result in match_results.items():
@@ -263,24 +310,33 @@ class SearchPipeline:
                 url=url,
                 title=f"职位申请 - {match_result.match_summary}",
                 match_result=match_result,
-                matched_at=time.time()
+                matched_at=time.time(),
+                above_threshold=match_result.score >= min_score,
             )
             search_results.append(search_result)
 
         # 筛选合格结果
         qualified_results = [
-            result for result in search_results
-            if result.is_qualified and result.match_result.score >= min_score
+            result for result in search_results if result.above_threshold
         ]
 
-        # 按优先级排序
-        qualified_results.sort(
-            key=lambda x: (x.get_priority_score(), x.match_result.score),
-            reverse=True
-        )
+        if qualified_results:
+            qualified_results.sort(
+                key=lambda x: (x.get_priority_score(), x.match_result.score),
+                reverse=True
+            )
+            return qualified_results[:max_results]
 
-        # 限制结果数量
-        return qualified_results[:max_results]
+        # 降级：全部低于门槛
+        degraded = sorted(
+            search_results, key=lambda x: x.match_result.score, reverse=True
+        )[:max_results]
+        if degraded:
+            logger.warning(
+                f"没有岗位达到 {min_score} 分门槛，降级返回最接近的 "
+                f"{len(degraded)} 个岗位（最高 {degraded[0].match_result.score} 分）"
+            )
+        return degraded
 
     def generate_report(self, results: List[SearchResult]) -> str:
         """生成搜索报告"""
@@ -295,6 +351,9 @@ class SearchPipeline:
 
 === 推荐投递目标 ===
 """
+
+        if all(not r.above_threshold for r in results):
+            report += "\n⚠️ 本轮没有岗位达到最低分门槛，以下为最接近的岗位（未达门槛）\n"
 
         for i, result in enumerate(results, 1):
             report += f"""
@@ -390,7 +449,7 @@ async def test_with_mock_data():
     # 模拟搜索结果
     mock_results = [
         SearchResult(
-            url="https://boards.greenhouse.io/bytedance/jobs/12345",
+            url="https://jobs.bytedance.com/experienced/position/12345/detail",
             title="字节跳动 - 前端工程师",
             match_result=MatchResultSchema(
                 score=85,
@@ -403,7 +462,7 @@ async def test_with_mock_data():
             matched_at=time.time()
         ),
         SearchResult(
-            url="https://lever.co/bytedance/jobs/67890",
+            url="https://jobs.bytedance.com/experienced/position/67890/detail",
             title="字节跳动 - 高级前端工程师",
             match_result=MatchResultSchema(
                 score=75,
@@ -416,7 +475,7 @@ async def test_with_mock_data():
             matched_at=time.time()
         ),
         SearchResult(
-            url="https://boards.greenhouse.io/bytedance/jobs/11111",
+            url="https://jobs.bytedance.com/experienced/position/11111/detail",
             title="字节跳动 - Web 开发工程师",
             match_result=MatchResultSchema(
                 score=45,

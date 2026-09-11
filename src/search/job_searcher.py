@@ -13,6 +13,7 @@ from loguru import logger
 
 from src.models.instruction_schemas import TargetInstructionSchema
 from src.models.schemas import ResumeSchema
+from src.search.query_expander import expand_role_variants
 from src.search.search_pipeline import SearchPipeline
 
 
@@ -67,6 +68,10 @@ class JobSearcher:
             target_companies=target_companies,
         )
 
+    def set_target_companies(self, companies: List[str] = None) -> None:
+        """运行时更新目标公司名单（搜索前由 Agent 询问用户后调用）"""
+        self.pipeline.set_target_companies(companies)
+
     async def search_jobs(self, persona) -> List[Dict]:
         """
         根据用户画像搜索职位
@@ -93,9 +98,15 @@ class JobSearcher:
                 "description": r.match_result.match_summary or r.title,
                 "match_result": r.match_result,
                 "match_score": r.match_result.score,
+                # False = 本轮没有达标岗位时降级返回的「最接近岗位」
+                "above_threshold": r.above_threshold,
             })
 
-        logger.info(f"JobSearcher 搜索完成，返回 {len(jobs)} 个职位")
+        degraded = sum(1 for j in jobs if not j["above_threshold"])
+        logger.info(
+            f"JobSearcher 搜索完成，返回 {len(jobs)} 个职位"
+            + (f"（其中 {degraded} 个未达门槛）" if degraded else "")
+        )
         return jobs
 
     def _build_search_inputs(self, persona) -> tuple:
@@ -127,11 +138,15 @@ class JobSearcher:
             skills = [s for s in raw_skills if isinstance(s, str)]
         skills = list(dict.fromkeys(skills))
 
+        # 岗位名扩展出近义变体，避免「前端工程师」搜不到「Web前端开发」这类岗位
+        role_variants = expand_role_variants(target_positions[0], skills)
+
         target_info = TargetInstructionSchema(
             company="",  # 未指定公司，全局搜索
             role=target_positions[0],
             location=locations[0] if locations else None,
             keywords=skills,
+            role_variants=role_variants,
         )
 
         resume = ResumeSchema(

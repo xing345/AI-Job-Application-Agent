@@ -5,6 +5,7 @@ Agent Orchestrator - Agent v2.0 中央控制器
 
 import asyncio
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -72,7 +73,7 @@ class AgentOrchestrator:
                 'use_company_sites': True,
                 'max_companies': 5,
                 'target_companies': [],
-                'sources': ['linkedin', 'indeed', 'bosszhipin']
+                'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job']
             },
             'matching': {
                 'threshold_score': 70,
@@ -275,9 +276,16 @@ class AgentOrchestrator:
                     company TEXT,
                     description TEXT,
                     match_score REAL,
+                    is_qualified INTEGER DEFAULT 1,
                     searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # 旧库补列（建表语句对已存在的表不生效）
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(job_search_log)")}
+            if "is_qualified" not in cols:
+                conn.execute(
+                    "ALTER TABLE job_search_log ADD COLUMN is_qualified INTEGER DEFAULT 1"
+                )
             now = datetime.now().isoformat()
             for job, match in zip(jobs, matching_results):
                 if isinstance(job, dict):
@@ -286,14 +294,16 @@ class AgentOrchestrator:
                     company = job.get("company") or ""
                     description = job.get("description") or ""
                     score = job.get("match_score")
+                    qualified = 1 if job.get("above_threshold", True) else 0
                 else:
                     url, title, company, description, score = None, str(job), "", "", None
+                    qualified = 1
                 if score is None:
                     score = getattr(match, "match_score", getattr(match, "score", None))
                 conn.execute(
-                    "INSERT INTO job_search_log (url, title, company, description, match_score, searched_at)"
-                    " VALUES (?,?,?,?,?,?)",
-                    (url, title, company, description, score, now),
+                    "INSERT INTO job_search_log (url, title, company, description, match_score, is_qualified, searched_at)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (url, title, company, description, score, qualified, now),
                 )
             conn.commit()
             conn.close()
@@ -301,8 +311,68 @@ class AgentOrchestrator:
         except Exception as e:
             logger.warning(f"保存搜索结果失败: {e}")
 
-    async def start_job_search_workflow(self):
-        """启动求职工作流"""
+    # ------------------------------------------------------------------ #
+    # 搜索前的目标公司指定
+    # ------------------------------------------------------------------ #
+    def _parse_company_input(self, raw: str) -> List[str]:
+        """解析用户输入的公司名单：支持逗号/顿号/分号/空格分隔，也支持直接给官网 URL"""
+        if not raw:
+            return []
+        parts = re.split(r"[,，、;；\s]+", raw.strip())
+        return list(dict.fromkeys(p.strip() for p in parts if p.strip()))
+
+    async def _prompt_target_companies(self, ask=None, current: List[str] = None) -> List[str]:
+        """
+        搜索前询问「去哪些公司找岗位」
+
+        Args:
+            ask: 提问函数（默认终端 input，测试时可注入）
+            current: 当前已配置的公司名单
+
+        Returns:
+            公司名/招聘官网 URL 列表；空列表表示不限制（按岗位自动发现公司）
+        """
+        ask = ask or input
+        current = list(current or [])
+
+        print("\n" + "-" * 60)
+        print("🏢 目标公司（可跳过）")
+        print("-" * 60)
+        print("  想只在特定公司的招聘官网找岗位？输入公司名或招聘官网 URL，")
+        print("  多个用逗号或空格分隔，例如: 字节跳动, 美团 https://jobs.xxx.com")
+        print(f"  直接回车 = 保持当前设置（当前: {'、'.join(current) if current else '不限公司'}）")
+
+        try:
+            raw = ask("公司/官网: ")
+        except Exception:
+            return current
+
+        companies = self._parse_company_input(raw)
+        if not companies:
+            print("  → 保持当前设置")
+            return current
+
+        print(f"  → 将在 {len(companies)} 家公司的招聘官网找岗: {'、'.join(companies)}")
+        return companies
+
+    def _apply_target_companies(self, companies: List[str]) -> None:
+        """把目标公司写入配置并推给已构造好的搜索器（无需重建管道）"""
+        if 'search' not in self.config:
+            self.config['search'] = {}
+        self.config['search']['target_companies'] = list(companies or [])
+        if self.job_searcher:
+            self.job_searcher.set_target_companies(companies)
+        else:
+            logger.warning("搜索引擎尚未初始化，目标公司仅写入配置")
+
+    async def start_job_search_workflow(self, prompt_companies: bool = True, ask_func=None):
+        """
+        启动求职工作流
+
+        Args:
+            prompt_companies: 搜索前是否询问目标公司（定时任务等无人值守场景传 False）
+            ask_func: 提问函数（默认终端 input，测试时可注入）
+        """
         logger.info("启动求职工作流...")
 
         # 画像统一为 DynamicUserPersona 模型（搜索器/匹配引擎均按模型属性读取）
@@ -318,6 +388,13 @@ class AgentOrchestrator:
         if not persona:
             logger.error("用户画像尚未生成，请先运行 persona")
             return
+
+        # 搜索前询问目标公司（回车 = 保持当前设置）
+        if prompt_companies:
+            companies = await self._prompt_target_companies(
+                ask_func, self.config.get('search', {}).get('target_companies')
+            )
+            self._apply_target_companies(companies)
 
         try:
             # 创建任务ID
@@ -507,6 +584,12 @@ class AgentOrchestrator:
             return None
         await self._save_user_persona()
 
+        # 4.5 搜索前询问目标公司（可跳过）
+        companies = await self._prompt_target_companies(
+            ask, self.config.get('search', {}).get('target_companies')
+        )
+        self._apply_target_companies(companies)
+
         # 5. 按方向关键词搜索 + 匹配
         print(f"\n🔍 正在按方向「{direction.title}」搜索岗位...")
         jobs, matching_results = await self._search_by_direction(direction)
@@ -686,17 +769,21 @@ class AgentOrchestrator:
         """
         from src.models.instruction_schemas import TargetInstructionSchema
         from src.models.schemas import ResumeSchema
+        from src.search.query_expander import expand_role_variants
 
         locations = []
         if isinstance(self.user_persona, dict):
             obj = self.user_persona.get("career_objective", {}) or {}
             locations = obj.get("location_preference") or []
 
+        role = direction.target_positions[0] if direction.target_positions else direction.title
         target_info = TargetInstructionSchema(
             company="",
-            role=(direction.target_positions[0] if direction.target_positions else direction.title),
+            role=role,
             location=(locations[0] if locations else None),
             keywords=direction.keywords,
+            # 岗位名扩展出近义变体，避免精确匹配导致搜不到岗位
+            role_variants=expand_role_variants(role, direction.keywords),
         )
         resume = ResumeSchema(
             name=(self.user_persona or {}).get("name", ""),
@@ -724,9 +811,12 @@ class AgentOrchestrator:
         return jobs, matching_results
 
     def _print_matched_jobs(self, jobs):
-        """打印搜索到的岗位"""
+        """打印搜索到的岗位（降级批次会被明确标注，避免误以为已达标）"""
+        degraded = [j for j in jobs if not j.get("above_threshold", True)]
         print("\n" + "=" * 60)
         print(f"🎯 搜索到的岗位 ({len(jobs)} 个)")
+        if degraded:
+            print(f"⚠️ 其中 {len(degraded)} 个未达匹配分门槛，仅供参考，建议不要直接投递")
         print("=" * 60)
         for i, job in enumerate(jobs, 1):
             mr = job.get("match_result")
@@ -734,7 +824,8 @@ class AgentOrchestrator:
             reasons = []
             if mr is not None and hasattr(mr, "reasons") and mr.reasons:
                 reasons = mr.reasons[:3]
-            print(f"\n[{i}] {job.get('title', '未知职位')}  匹配 {score}/100")
+            tag = "" if job.get("above_threshold", True) else "  ⚠️ 未达门槛"
+            print(f"\n[{i}] {job.get('title', '未知职位')}  匹配 {score}/100{tag}")
             print(f"    {job.get('url')}")
             if reasons:
                 print(f"    匹配点: {'、'.join(reasons)}")
@@ -796,7 +887,8 @@ class AgentOrchestrator:
                     break
 
                 logger.info("执行定期职位搜索...")
-                await self.start_job_search_workflow()
+                # 无人值守场景不能卡在 input() 上，沿用已配置的目标公司
+                await self.start_job_search_workflow(prompt_companies=False)
 
             except asyncio.CancelledError:
                 break
@@ -988,7 +1080,10 @@ DEFAULT_AGENT_CONFIG = {
         'interval_hours': 24,
         'max_results_per_search': 50,
         'use_browser': True,
-        'sources': ['linkedin', 'indeed', 'bosszhipin']
+        'use_company_sites': True,
+        'max_companies': 5,
+        'target_companies': [],
+        'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job']
     },
     'matching': {
         'threshold_score': 70,

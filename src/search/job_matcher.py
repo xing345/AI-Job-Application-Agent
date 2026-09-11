@@ -6,9 +6,9 @@
 import asyncio
 import json
 import re
-from typing import List, Optional
+from typing import Dict, List
 from playwright.async_api import async_playwright
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 from loguru import logger
 from openai import AsyncOpenAI
 
@@ -86,15 +86,10 @@ class JobMatcher:
                     await page.goto(url, timeout=self.config.playwright_timeout)
                     await asyncio.sleep(2)  # 等待页面加载
 
-                    # 获取页面标题和内容
-                    title = await page.title()
-                    page_text = await page.inner_text("body")
-
-                    # 清理文本
-                    jd_text = self._clean_jd_text(f"{title}\n{page_text}")
+                    jd_text = await self._extract_page_text(page)
 
                     self.logger.info(f"成功抓取 JD: {url}")
-                    return jd_text[:5000]  # 限制文本长度
+                    return jd_text
 
                 except Exception as e:
                     self.logger.error(f"抓取 JD 失败: {url}, 错误: {e}")
@@ -105,6 +100,74 @@ class JobMatcher:
         except Exception as e:
             self.logger.error(f"Playwright 启动失败: {e}")
             return f"无法访问页面: {str(e)}"
+
+    async def _extract_page_text(self, page) -> str:
+        """把已打开的页面内容整理成 JD 文本"""
+        title = await page.title()
+        page_text = await page.inner_text("body")
+        return self._clean_jd_text(f"{title}\n{page_text}")[:5000]
+
+    async def fetch_jd_texts(
+        self,
+        urls: List[str],
+        concurrency: int = 5,
+        settle_seconds: float = 2.0,
+    ) -> Dict[str, str]:
+        """
+        批量抓取 JD：复用同一个浏览器实例
+
+        原实现每个 URL 起一次 chromium，20 个 URL 就是 20 次浏览器启动，
+        极易超时并返回空文本，进而让真实岗位被整批丢弃。
+        失败返回空串（而不是错误提示字符串），交由调用方用职位标题兜底。
+
+        Args:
+            urls: 待抓取的职位页 URL
+            concurrency: 并发页面数上限
+            settle_seconds: 每页等待渲染的时间
+        """
+        results: Dict[str, str] = {u: "" for u in urls}
+        if not urls:
+            return results
+
+        sem = asyncio.Semaphore(max(1, concurrency))
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                try:
+                    async def fetch_one(url: str):
+                        async with sem:
+                            page = None
+                            try:
+                                page = await browser.new_page()
+                                await page.goto(
+                                    url, timeout=self.config.playwright_timeout
+                                )
+                                await asyncio.sleep(settle_seconds)
+                                text = await self._extract_page_text(page)
+                                self.logger.info(f"成功抓取 JD: {url}")
+                                return url, text
+                            except Exception as e:
+                                self.logger.warning(f"抓取 JD 失败: {url}, 错误: {e}")
+                                return url, ""
+                            finally:
+                                if page:
+                                    try:
+                                        await page.close()
+                                    except Exception:
+                                        pass
+
+                    for url, text in await asyncio.gather(
+                        *(fetch_one(u) for u in urls)
+                    ):
+                        results[url] = text
+                finally:
+                    await browser.close()
+
+        except Exception as e:
+            self.logger.error(f"批量抓取 JD 失败: {e}")
+
+        return results
 
     def _clean_jd_text(self, text: str) -> str:
         """清理 JD 文本"""

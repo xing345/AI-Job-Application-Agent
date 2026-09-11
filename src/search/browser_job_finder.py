@@ -31,17 +31,16 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, project_root)
 
 from src.models.instruction_schemas import TargetInstructionSchema
+from src.search.query_expander import query_terms, role_tokens
 
-# 招聘/职位详情页的 URL 特征（国内外常见招聘平台 + 海外 ATS）
+# 招聘/职位详情页的 URL 特征（国内招聘平台 + 公司自有招聘站）
 JOB_URL_HINTS = [
     # 国内平台
     "zhaopin.com", "bosszhipin.com", "zhipin.com", "liepin.com", "lagou.com",
     "51job.com", "jobs.51job", "zhipin", "/job_", "/jobs/", "/job/", "/zp/",
     "jobdetail", "position_detail", "/position/", "/a/",
-    # 海外 ATS / 公司招聘站
-    "greenhouse.io", "lever.co", "myworkdayjobs.com", "ashbyhq.com",
-    "recruitee.com", "smartrecruiters.com", "/career", "/careers", "/vacanc",
-    "/recruit", "/join", "/hiring",
+    # 公司自有招聘站（国内外通用路径，不绑定具体厂商）
+    "/career", "/careers", "/vacanc", "/recruit", "/join", "/hiring",
 ]
 
 # 非职位页面（新闻、博客、帮助等），命中则跳过
@@ -60,12 +59,38 @@ CAPTCHA_HINTS = [
 # 招聘聚合平台/内容站：公司通道发现公司时排除这些域名
 AGGREGATOR_DOMAINS = [
     "liepin.com", "zhaopin.com", "bosszhipin.com", "zhipin.com", "51job.com",
-    "lagou.com", "kanzhun.com", "maimai.cn", "linkedin.com", "zhihu.com",
+    "lagou.com", "kanzhun.com", "maimai.cn", "zhihu.com",
     "baidu.com", "bing.com", "google.", "csdn.net", "jianshu.com", "sspai.com",
     "weibo.com", "bilibili.com", "tianyancha.com", "qcc.com", "qixin.com",
     "163.com", "sohu.com", "sina.com", "qq.com", "mp.weixin", "douyin.com",
     "github.com", "gitee.com", "baike", "wiki", "toutiao.com",
 ]
+
+# 国内招聘平台（通道1/门户通道的优先级排序用）
+CN_JOB_PLATFORMS = [
+    "bosszhipin.com", "zhipin.com", "lagou.com", "liepin.com",
+    "zhaopin.com", "51job.com",
+]
+
+# 应用商店/百科/社媒等非公司官网噪声域名
+JUNK_DOMAINS = [
+    "play.google.com", "apps.apple.com", "itunes.apple.com", "chrome.google.com",
+    "appgallery", "samsungapps.com", "apk", "wikipedia.org", "wikimedia.org",
+    "web.archive.org", "youtube.com", "twitter.com", "x.com", "facebook.com",
+    "instagram.com", "taobao.com", "jd.com", "amazon.",
+    "91wllm", "chaojijianli", "cake.me", "nowcoder.com", "gaoxiaojob",
+    "yuanjisong", "reddit.com", "heywhale", "jobui", "segmentfault",
+    "juejin.cn", "cnblogs", "offcn", "fenbi", "yingjiesheng",
+    "xiaohongshu.com", "douban.com", "tieba.baidu", "cuiqingcai",
+    "niuqizp", "niuzhi",
+]
+# 登录/账号类主机特征（不是招聘页）
+LOGIN_HOST_HINTS = ["passport", "login.", "signin", "account.", "id.", "auth."]
+# 职位详情链接特征（区别于导航/介绍页）
+JOB_DETAIL_RE = re.compile(
+    r"(id=|jobid|positionid|postid|/position|/jobdetail|/job/|/jobs/|/detail/|/vacanc)",
+    re.I,
+)
 
 # 公司官网上「招聘入口」的文案/路径特征
 CAREER_TEXT_HINTS = [
@@ -89,11 +114,7 @@ CAREER_SUBDOMAIN_PREFIXES = [
     "xiaozhao.", "zhaopin.", "talent.",
 ]
 
-# 职位名里常见的通用词（用于中文岗位名切分匹配）
-ROLE_GENERIC_TOKENS = [
-    "工程师", "开发", "设计师", "产品", "运营", "经理", "架构师", "分析师",
-    "研究员", "实习", "校招", "专家", "负责人", "总监",
-]
+# 职位名通用词与分词逻辑统一由 query_expander 提供（ROLE_GENERIC_TOKENS 已从该模块导入）
 
 # 浏览器内执行：抽取全部带 href 的锚点（浏览器自动把相对路径解析为绝对 URL）
 _ANCHOR_JS = """els => els.map(e => ({
@@ -223,9 +244,8 @@ class BrowserJobFinder:
                         continue
 
                     logger.info(f"公司通道：进入 {name} 招聘页 {career_url}")
-                    site_jobs = await self._extract_jobs_from_portal(
-                        {"url": career_url, "title": name, "snippet": ""},
-                        target_info,
+                    site_jobs = await self._extract_company_jobs(
+                        name, career_url, target_info
                     )
                     for job in site_jobs:
                         job["company"] = name
@@ -255,58 +275,124 @@ class BrowserJobFinder:
     ) -> List[Dict]:
         """
         发现公司候选：优先用户指定名单（名称自动找官网），否则按岗位 Tavily 发现。
-        排除招聘聚合平台，只保留公司自有域名。返回 [{name, url, career_url?}]
+        排除招聘聚合平台/应用商店/百科，只保留公司自有域名。
+        返回 [{name, url, career_url?}]，可直达招聘页的排在前面。
         """
         candidates: Dict[str, Dict] = {}
 
-        def add_result(url: str, title: str, force_homepage: bool = False):
-            if not url or self._is_aggregator(url):
+        def add_result(url: str, title: str, preferred_name: str = ""):
+            kind = self._classify_company_result(url)
+            if not kind or self._is_junk_title(title):
                 return
             host = urlparse(url).netloc.lower().replace("www.", "")
             if not host or host in candidates:
                 return
-            name = self._clean_company_name(title) or host
-            is_career = (not force_homepage) and self._url_has_career_hint(url)
+            name = preferred_name or self._clean_company_name(title) or host
             candidates[host] = {
                 "name": name,
-                "url": url if is_career else self._homepage_of(url),
-                "career_url": url if is_career else None,
+                "url": url if kind == "career" else self._homepage_of(url),
+                "career_url": url if kind == "career" else None,
             }
 
         if known_companies:
-            # 用户指定：名称 -> Tavily 找官网；本身是 URL 则直接用
+            # 用户指定：公司名 -> 多查询择优（招聘官网优先于首页）；本身是 URL 直接用
             for raw in known_companies:
                 raw = (raw or "").strip()
                 if not raw:
                     continue
                 if raw.startswith("http"):
-                    add_result(raw, self._host_of(raw), force_homepage=False)
+                    add_result(raw, self._host_of(raw), preferred_name=self._host_of(raw))
                     continue
-                resp = await self._tavily_search(
-                    f"{raw} 官网", max_results=5, exclude=AGGREGATOR_DOMAINS
-                )
-                for item in resp:
-                    if raw.lower() in (item.get("title", "") + item.get("url", "")).lower() \
-                            or not self._is_aggregator(item.get("url", "")):
-                        add_result(item.get("url", ""), item.get("title", raw))
-                        break
+                resolved = await self._resolve_named_company(raw)
+                if resolved:
+                    host = urlparse(resolved["url"]).netloc.lower().replace("www.", "")
+                    candidates[host] = resolved
         else:
-            role = (target_info.role or "").strip()
             location = (target_info.location or "").strip()
+            # 每个岗位词各出一条查询，扩大同义岗位的公司召回
             queries = [
-                f"{role} {location} 招聘 加入我们 官网".strip(),
-                f"{role} careers jobs official company",
+                f"{term} {location} 招聘 加入我们 官网".strip()
+                for term in query_terms(target_info, limit=2)
             ]
             if target_info.keywords:
-                queries[0] += " " + " ".join(target_info.keywords[:3])
+                queries = [
+                    f"{q} {' '.join(str(k) for k in target_info.keywords[:3])}".strip()
+                    for q in queries
+                ]
             for q in queries:
                 for item in await self._tavily_search(
-                    q, max_results=10, exclude=AGGREGATOR_DOMAINS
+                    q, max_results=10, exclude=AGGREGATOR_DOMAINS + JUNK_DOMAINS
                 ):
                     add_result(item.get("url", ""), item.get("title", ""))
 
         return sorted(candidates.values(), key=lambda c: 0 if c.get("career_url") else 1)
 
+    async def _resolve_named_company(self, name: str) -> Optional[Dict]:
+        """公司名 -> 官网/招聘页：以官网主域为准，优先同域招聘页，否则回退官网首页"""
+        homes, careers = [], []
+        for q in (f"{name} 招聘官网", f"{name} 官网", f"{name} careers"):
+            resp = await self._tavily_search(
+                q, max_results=6, exclude=AGGREGATOR_DOMAINS + JUNK_DOMAINS
+            )
+            for item in resp:
+                url, title = item.get("url", ""), item.get("title", "")
+                kind = self._classify_company_result(url)
+                if not kind or name.lower() not in (title + url).lower():
+                    continue
+                record = {
+                    "name": name,
+                    "url": url if kind == "career" else self._homepage_of(url),
+                    "career_url": url if kind == "career" else None,
+                    "kind": kind, "regdom": self._registrable_domain(url),
+                }
+                (careers if kind == "career" else homes).append(record)
+
+        if homes:
+            home = sorted(homes, key=lambda r: 0 if r["kind"] == "home" else 1)[0]
+            same = [c for c in careers if c["regdom"] == home["regdom"]]
+            if same:
+                c = same[0]
+                return {"name": name, "url": c["url"], "career_url": c["career_url"]}
+            return {"name": name, "url": home["url"], "career_url": None}
+        if careers:
+            c = careers[0]
+            return {"name": name, "url": c["url"], "career_url": c["career_url"]}
+        return None
+
+    def _registrable_domain(self, url: str) -> str:
+        """取可注册主域（兼容 com.cn 等二级后缀）"""
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        parts = host.split(".")
+        if len(parts) >= 3 and parts[-2] in ("com", "net", "org", "gov", "edu",
+                                             "ac", "co"):
+            return ".".join(parts[-3:])
+        return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+    def _classify_company_result(self, url: str) -> Optional[str]:
+        """分类搜索结果：career=公司招聘页 home=官网首页 subpage=官网子页 None=噪声"""
+        if not url or self._is_aggregator(url) or self._is_junk(url):
+            return None
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "/").lower()
+        if not host or any(h in host for h in LOGIN_HOST_HINTS):
+            return None
+        if host.endswith((".edu.cn", ".ac.cn", ".edu", ".gov.cn", ".gov")):
+            return None
+        third_party_paths = ("/campus/view", "/xiaozhao/", "/jobfair",
+                             "/xuanjiang", "/campus/detail")
+        if any(p in path for p in third_party_paths):
+            return None
+        if self._host_has_career_prefix(host) or \
+                any(h in path for h in CAREER_URL_HINTS):
+            return "career"
+        if path in ("/", "") or path.rstrip("/") in ("/zh", "/cn", "/en", "/zh-cn"):
+            return "home"
+        return "subpage"
+
+    # ================================================================== #
+    # 公司官网 -> 招聘页定位
+    # ================================================================== #
     async def _locate_career_page(self, homepage: str) -> Optional[str]:
         """在公司官网上定位招聘页：先读首页锚点，再探测常见路径/子域"""
         page = None
@@ -401,30 +487,26 @@ class BrowserJobFinder:
         return None
 
     # ================================================================== #
-    # 门户候选发现（Tavily 宽泛查询，不做域名白名单限制）
+    # 门户候选发现（Tavily 宽泛查询，国内平台优先）
     # ================================================================== #
     def _build_portal_queries(self, target_info: TargetInstructionSchema) -> List[str]:
-        role = (target_info.role or "").strip()
+        """门户通道查询词：只保留中文查询，避免把海外招聘站捞进来"""
         location = (target_info.location or "").strip()
         queries = []
-
-        zh = f"{role} {location} 招聘".strip()
-        if target_info.keywords:
-            zh += " " + " ".join(target_info.keywords[:4])
-        queries.append(zh)
-
-        en = f"{role} jobs careers hiring"
-        if location:
-            en += f" {location}"
-        queries.append(en)
+        # 每个岗位词各出一条查询，提高同义岗位的召回
+        for term in query_terms(target_info, limit=2):
+            zh = f"{term} {location} 招聘".strip()
+            if target_info.keywords:
+                zh += " " + " ".join(str(k) for k in target_info.keywords[:4])
+            queries.append(zh)
 
         company = (target_info.company or "").strip()
         if company:
-            queries.append(f"{company} 招聘 职位 {role}")
+            queries.append(f"{company} 招聘 职位 {target_info.role}")
         return queries
 
     async def _discover_portal_candidates(self, target_info: TargetInstructionSchema) -> List[Dict]:
-        """用 Tavily 发现候选招聘门户（不做域名白名单限制）"""
+        """用 Tavily 发现候选招聘门户（不做域名白名单限制，排除应用商店/百科等噪声）"""
         if not self.api_key:
             logger.warning("未配置 TAVILY_API_KEY，无法发现候选门户")
             return []
@@ -433,7 +515,7 @@ class BrowserJobFinder:
         for query in self._build_portal_queries(target_info):
             for item in await self._tavily_search(query, max_results=10):
                 url = item.get("url", "")
-                if not url or url in candidates or self._looks_non_job(url):
+                if not url or url in candidates or self._looks_non_job(url) or self._is_junk(url):
                     continue
                 title = item.get("title", "") or ""
                 snippet = item.get("content", "") or item.get("snippet", "") or ""
@@ -513,6 +595,239 @@ class BrowserJobFinder:
             logger.warning(f"锚点抽取失败: {e}")
             return []
 
+    async def _extract_company_jobs(self, company_name, career_url, target_info):
+        """在公司招聘站内：进入职位列表页 -> 站内搜索 -> 锚点/XHR 双通道抽取职位"""
+        page = None
+        jobs, seen = [], set()
+        try:
+            page = await self._context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+            api_jobs, handler = self._make_api_capture()
+            page.on("response", handler)
+            try:
+                await page.goto(career_url, wait_until="domcontentloaded",
+                                timeout=self.timeout_ms)
+            except Exception as e:
+                logger.warning(f"{company_name} 招聘页打开失败 {career_url}: {e}")
+                return []
+            await self._settle_page(page)
+
+            # 1) 钻取到「社会招聘/全部职位/职位搜索」列表页
+            list_href = await self._find_job_list_href(page)
+            if list_href:
+                try:
+                    await page.goto(list_href, wait_until="domcontentloaded",
+                                    timeout=self.timeout_ms)
+                    await self._settle_page(page)
+                    logger.info(f"{company_name} 进入职位列表页 {page.url}")
+                except Exception:
+                    pass
+
+            role_toks = self._role_tokens(target_info)
+
+            # 2) 站内搜索框输入岗位（主岗位名优先，命中太少时换同义变体重试）
+            scored = await self._score_anchors(page, role_toks)
+            for term in self._fallback_role_terms(target_info):
+                if len(scored) >= 3 or not await self._try_role_search(page, term):
+                    break
+                await self._settle_page(page)
+                scored = await self._score_anchors(page, role_toks)
+
+            # 3) 锚点抽取（过滤导航，只留职位详情）
+            if len(scored) < 3 and self._has_captcha_or_wall(await self._safe_inner_text(page)):
+                await self._handle_block(page.url, page)
+                await self._settle_page(page)
+                scored = await self._score_anchors(page, role_toks)
+
+            for score, a in scored:
+                href = a["href"]
+                head = a["text"].split("\n", 1)[0].strip()
+                if href in seen or self._is_nav_text(head) or self._looks_non_job(href):
+                    continue
+                if not self._looks_like_job_detail(head, href, role_toks):
+                    continue
+                seen.add(href)
+                jobs.append({
+                    "url": href, "title": head[:80], "company": company_name,
+                    "location": target_info.location or "",
+                    "description": "", "source": "browser",
+                })
+                if len(jobs) >= self.max_jobs_per_site:
+                    break
+
+            # 4) XHR/API 兜底（SPA 职位卡片不是 <a> 时，用接口职位+站点 URL 模板）
+            if len(jobs) < self.max_jobs_per_site:
+                for item in api_jobs:
+                    href = self._build_company_job_url(page.url, item)
+                    text = item.get("title", "")
+                    if not href or href in seen or self._is_nav_text(text):
+                        continue
+                    seen.add(href)
+                    jobs.append({
+                        "url": href, "title": text[:80], "company": company_name,
+                        "location": item.get("city") or target_info.location or "",
+                        "description": "", "source": "browser_api",
+                    })
+                    if len(jobs) >= self.max_jobs_per_site:
+                        break
+
+            logger.info(f"{company_name} 招聘站最终抽取 {len(jobs)} 个职位")
+            return jobs
+        except Exception as e:
+            logger.warning(f"{company_name} 站内抽取失败 {career_url}: {e}")
+            return jobs
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+    async def _find_job_list_href(self, page):
+        """在招聘首页找「全部职位/社会招聘/职位搜索」列表页链接"""
+        try:
+            anchors = await self._collect_anchors(page)
+        except Exception:
+            return None
+        best, best_score = None, 0
+        for a in anchors:
+            t = (a.get("text") or "").strip()
+            href = a.get("href") or ""
+            if not href or href.startswith(("javascript:", "#", "mailto:")):
+                continue
+            score = 0
+            if any(k in t for k in ["社会招聘", "全部职位", "职位搜索", "搜索职位",
+                                    "所有职位", "热门职位", "查看职位"]):
+                score += 10
+            if any(k in t.lower() for k in ["all jobs", "search jobs", "open positions",
+                                            "job opportunities", "early career"]):
+                score += 10
+            low = href.lower()
+            if any(k in low for k in ["/social", "/position", "/search", "/jobs",
+                                      "/joblist", "/job-list", "/list"]):
+                score += 5
+            if "校园" in t or "campus" in low or t in ["首页", "登录"]:
+                score -= 8
+            if score > best_score:
+                best, best_score = href, score
+        return best if best_score >= 10 else None
+
+    def _is_nav_text(self, text: str) -> bool:
+        t = (text or "").strip().lower().strip("/")
+        if len(t) <= 2:
+            return True
+        nav = ["首页", "登录", "注册", "校园招聘", "社会招聘", "常见问题", "行程", "赛事",
+               "计划", "官网", "返回", "更多", "查看更多", "了解更多", "关于我们", "联系我们",
+               "home", "login", "register", "about", "contact", "faq", "more", "back"]
+        return any(t == n for n in nav)
+
+    def _looks_like_job_detail(self, text: str, href: str, role_toks) -> bool:
+        """判断锚点是否真的是职位详情：URL 像详情页，且文本本身像一个职位"""
+        t = (text or "").strip()
+        if not JOB_DETAIL_RE.search(href or "") or len(t) < 4:
+            return False
+        occ = ["工程师", "开发", "设计师", "产品", "运营", "经理", "专员", "架构师",
+               "分析师", "研究员", "主管", "总监", "顾问", "专家",
+               "engineer", "developer", "designer", "manager", "specialist",
+               "analyst", "intern", "scientist"]
+        if any(w in t for w in occ):
+            return True
+        if role_toks and any(tok in t.lower() for tok in role_toks):
+            return True
+        return False
+
+    def _make_api_capture(self):
+        """返回 (结果列表, response 事件处理器)，抓取招聘站 XHR 中的职位 JSON"""
+        found = []
+
+        async def on_response(response):
+            try:
+                ct = (response.headers or {}).get("content-type", "")
+                if "json" not in ct:
+                    return
+                u = response.url.lower()
+                list_hints = ("getjoblist", "job/posts", "job/list", "position/list",
+                              "joblist", "job/search", "search/job", "/jobs?",
+                              "vacancy/list", "recruit/list", "queryjob", "jobquery",
+                              "job/page", "position/query")
+                if not any(k in u for k in list_hints):
+                    return
+                data = await response.json()
+                self._walk_jobs_json(data, found)
+            except Exception:
+                pass
+
+        return found, on_response
+
+    def _walk_jobs_json(self, node, found, depth=0):
+        """递归遍历 JSON，提取职位对象（职位名 + 职位ID/链接 + 城市）"""
+        if depth > 9 or len(found) >= 40:
+            return
+        name_keys = ("positionname", "jobname", "postname", "jobtitle", "recruitpost",
+                     "position", "name", "title")
+        id_keys = ("jobunionid", "positionid", "jobid", "postid", "recruitid", "id")
+        if isinstance(node, dict):
+            name, jid, link, cities = None, None, None, []
+            for k, v in node.items():
+                kl = k.lower()
+                if isinstance(v, str) and v.strip():
+                    if kl in name_keys and len(v.strip()) >= 3:
+                        name = v.strip()
+                    elif kl in id_keys:
+                        jid = v.strip()
+                    elif kl in ("positionurl", "pcurl", "detailurl", "joburl",
+                                "posturl", "h5url", "url", "link") and v.startswith("http"):
+                        link = v
+                elif isinstance(v, (str, int)) and kl in id_keys and str(v).strip():
+                    jid = str(v).strip()
+                elif isinstance(v, list) and kl in ("citylist", "cities", "workcitylist"):
+                    cities = [c.get("name", "") for c in v
+                              if isinstance(c, dict) and c.get("name")]
+            if name and (jid or link) and self._looks_like_job_name(name):
+                if not (link and any(x.get("url") == link for x in found)) and \
+                        not (jid and any(x.get("id") == jid for x in found)):
+                    found.append({
+                        "title": name, "id": jid or "",
+                        "url": link or "", "city": "、".join(cities),
+                    })
+            for v in node.values():
+                self._walk_jobs_json(v, found, depth + 1)
+        elif isinstance(node, list):
+            for v in node[:80]:
+                self._walk_jobs_json(v, found, depth + 1)
+
+    def _looks_like_job_name(self, name: str) -> bool:
+        """排除枚举/分类/城市等非职位名"""
+        n = (name or "").strip()
+        if len(n) < 4 or len(n) > 40:
+            return False
+        if n in ("社会招聘", "校园招聘", "应届生", "实习生", "正式", "北京", "上海"):
+            return False
+        if n.endswith(("类", "招聘", "计划", "专栏")) and len(n) <= 6:
+            return False
+        occ = ("工程师", "开发", "经理", "专员", "设计师", "运营", "产品", "分析师",
+               "研究员", "主管", "总监", "顾问", "专家", "架构师", "算法", "测试",
+               "engineer", "developer", "manager", "intern", "designer",
+               "specialist", "analyst", "scientist", "lead", "director")
+        # 任何长度都必须含岗位词，过滤地址/分类/枚举对象
+        if not any(w in n.lower() for w in occ):
+            return False
+        return True
+
+    def _build_company_job_url(self, page_url: str, item: Dict) -> str:
+        """根据招聘站主机与接口返回的职位 ID/链接构造详情页 URL"""
+        if item.get("url"):
+            return item["url"]
+        jid = item.get("id")
+        if not jid:
+            return ""
+        host = urlparse(page_url).netloc.lower()
+        if "meituan.com" in host:
+            return f"https://zhaopin.meituan.com/web/position/detail?jobUnionId={jid}"
+        if "bytedance.com" in host:
+            return f"https://jobs.bytedance.com/experienced/position/{jid}/detail"
+        return ""
+
     async def _extract_jobs_from_portal(self, portal: Dict, target_info) -> List[Dict]:
         """打开单个招聘页（聚合门户或公司招聘页），抽取职位详情链接"""
         url = portal["url"]
@@ -529,29 +844,32 @@ class BrowserJobFinder:
 
             await self._settle_page(page)
 
-            role_tokens = self._role_tokens(target_info)
-            scored = await self._score_anchors(page, role_tokens)
+            role_toks = self._role_tokens(target_info)
+            scored = await self._score_anchors(page, role_toks)
 
-            # 职位过少：先尝试站内搜索框输入岗位，再判断验证墙
-            if len(scored) < 3 and await self._try_role_search(page, target_info.role):
+            # 职位过少：站内搜索框输入岗位（主岗位名优先，命中太少时换同义变体重试）
+            for term in self._fallback_role_terms(target_info):
+                if len(scored) >= 3 or not await self._try_role_search(page, term):
+                    break
                 await self._settle_page(page)
-                scored = await self._score_anchors(page, role_tokens)
+                scored = await self._score_anchors(page, role_toks)
 
             if len(scored) < 3 and self._has_captcha_or_wall(await self._safe_inner_text(page)):
                 await self._handle_block(url, page)
                 await self._settle_page(page)
-                scored = await self._score_anchors(page, role_tokens)
+                scored = await self._score_anchors(page, role_toks)
 
             jobs = []
             seen = set()
             for score, a in scored[: self.max_jobs_per_site * 3]:
+                head = a["text"].split("\n", 1)[0].strip()
                 if a["href"] in seen or self._looks_non_job(a["href"]):
                     continue
                 seen.add(a["href"])
                 jobs.append({
                     "url": a["href"],
-                    "title": a["text"][:80],
-                    "company": self._guess_company(portal.get("title", ""), a["href"]),
+                    "title": head[:80],
+                    "company": self._guess_company(portal.get("title", "")),
                     "location": target_info.location or "",
                     "description": portal.get("snippet", ""),
                     "source": "browser",
@@ -572,12 +890,12 @@ class BrowserJobFinder:
                 except Exception:
                     pass
 
-    async def _score_anchors(self, page, role_tokens: List[str]) -> List:
+    async def _score_anchors(self, page, role_toks: List[str]) -> List:
         """抽取锚点并评分排序，返回 [(score, anchor)] 降序"""
         anchors = await self._collect_anchors(page)
         scored = []
         for a in anchors:
-            score = self._score_anchor(a["text"], a["href"], role_tokens)
+            score = self._score_anchor(a["text"], a["href"], role_toks)
             if score > 0:
                 scored.append((score, a))
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -594,11 +912,12 @@ class BrowserJobFinder:
         )
         try:
             box = await page.query_selector(selector)
-            if not box:
+            if not box or not await box.is_visible():
                 return False
-            await box.fill(role[:30])
-            await box.press("Enter")
-            await asyncio.sleep(2.0)
+            await box.click(timeout=3000)
+            await box.fill(role[:30], timeout=3000)
+            await box.press("Enter", timeout=3000)
+            await asyncio.sleep(2.5)
             logger.info(f"已在站内搜索框输入岗位: {role}")
             return True
         except Exception:
@@ -645,30 +964,23 @@ class BrowserJobFinder:
     # 评分 / 匹配 / 文本工具
     # ================================================================== #
     def _role_tokens(self, target_info: TargetInstructionSchema) -> List[str]:
-        """从目标岗位 + 关键词中拆出用于匹配的 token"""
-        raw = target_info.role or ""
-        tokens = set()
-        for m in re.findall(r"[A-Za-z][A-Za-z+#.\-]{1,}", raw):
-            if len(m) >= 2:
-                tokens.add(m.lower())
-        zh = re.sub(r"[A-Za-z\s]+", " ", raw)
-        for word in ROLE_GENERIC_TOKENS:
-            if word in zh:
-                tokens.add(word)
-        for i in range(len(zh) - 1):
-            gram = zh[i:i + 2].strip()
-            if len(gram) == 2 and not re.search(r"[\s，,、/（）()]", gram):
-                tokens.add(gram)
-        for kw in (target_info.keywords or [])[:8]:
-            for m in re.findall(r"[A-Za-z][A-Za-z+#.\-]{1,}", kw):
-                tokens.add(m.lower())
-        return [t for t in tokens if t]
+        """从目标岗位 + 变体 + 关键词中拆出用于模糊匹配的 token"""
+        return role_tokens(
+            target_info.role,
+            target_info.keywords,
+            getattr(target_info, "role_variants", None),
+        )
 
-    def _score_anchor(self, text: str, href: str, role_tokens: List[str]) -> int:
-        """给单个锚点评分，>0 才认为是职位链接"""
-        t = text.lower()
+    def _fallback_role_terms(self, target_info: TargetInstructionSchema) -> List[str]:
+        """站内搜索框可用的岗位词序列（主岗位名在前，变体在后）"""
+        return query_terms(target_info, limit=3) or []
+
+    def _score_anchor(self, text: str, href: str, role_toks: List[str]) -> int:
+        """给单个锚点评分，>0 才认为是职位链接（只取首行职位名参与评分）"""
+        head = (text or "").split("\n", 1)[0].strip()
+        t = head.lower()
         h = href.lower()
-        if len(text) < 2 or len(text) > 80:
+        if len(head) < 2 or len(head) > 120:
             return 0
         score = 0
         if any(hint in h for hint in JOB_URL_HINTS):
@@ -677,7 +989,7 @@ class BrowserJobFinder:
                                     "架构师", "分析师", "研究员", "实习", "engineer",
                                     "developer", "designer", "manager"]):
             score += 3
-        hit_tokens = [tok for tok in role_tokens if tok in t]
+        hit_tokens = [tok for tok in role_toks if tok in t]
         score += 2 * len(hit_tokens)
         if score == 0:
             return 0
@@ -704,37 +1016,42 @@ class BrowserJobFinder:
         return any(d in u for d in AGGREGATOR_DOMAINS)
 
     def _url_has_career_hint(self, url: str) -> bool:
+        p = urlparse((url or "").lower())
+        if self._host_has_career_prefix(p.netloc):
+            return True
+        return any(h in p.path for h in CAREER_URL_HINTS)
+
+    def _host_has_career_prefix(self, host: str) -> bool:
+        host = (host or "").lower().replace("www.", "")
+        return any(host.startswith(p) for p in CAREER_SUBDOMAIN_PREFIXES)
+
+    def _is_junk(self, url: str) -> bool:
         u = (url or "").lower()
-        return any(h in u for h in CAREER_URL_HINTS)
+        return any(d in u for d in JUNK_DOMAINS)
+
+    def _is_junk_title(self, title: str) -> bool:
+        t = (title or "")
+        junk_words = ["公告", "简章", "宣讲会", "是干什么", "兼职", "是做什么",
+                      "面经", "经验贴", "教程", "怎么", "如何", "r/", "latest "]
+        return any(w.lower() in t.lower() for w in junk_words)
 
     def _portal_score(self, url: str, title: str) -> int:
-        """门户排序：垂直招聘平台/ATS 优先"""
+        """门户排序：国内垂直招聘平台优先，其次公司自有招聘站"""
         u = (url or "").lower()
         t = (title or "").lower()
         score = 0
-        priority_domains = [
-            "zhaopin.com", "liepin.com", "lagou.com", "51job.com", "zhipin.com",
-            "greenhouse.io", "lever.co", "myworkdayjobs.com", "ashbyhq.com",
-            "recruitee.com", "smartrecruiters.com", "linkedin.com",
-        ]
-        for i, d in enumerate(priority_domains):
+        for i, d in enumerate(CN_JOB_PLATFORMS):
             if d in u:
                 score += 20 - i
+        if self._url_has_career_hint(url):
+            score += 8
         if any(w in t for w in ["招聘", "职位", "career", "job"]):
             score += 2
         return score
 
-    def _guess_company(self, portal_title: str, href: str) -> str:
+    def _guess_company(self, portal_title: str) -> str:
         """从门户标题粗略推断公司名（无法确定时返回空串）"""
-        title = (portal_title or "").strip()
-        title = re.split(r"[-_|–—]", title)[0].strip()
-        host = urlparse(href).netloc
-        platform_hosts = ["zhaopin.com", "liepin.com", "lagou.com", "51job.com",
-                          "zhipin.com", "linkedin.com", "greenhouse.io", "lever.co",
-                          "myworkdayjobs.com", "ashbyhq.com", "recruitee.com"]
-        if any(p in host for p in platform_hosts):
-            return title
-        return title
+        return re.split(r"[-_|–—]", (portal_title or "").strip())[0].strip()
 
     def _clean_company_name(self, title: str) -> str:
         """从搜索结果标题提取公司名（去掉官网/招聘等后缀噪声）"""

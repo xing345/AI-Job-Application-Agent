@@ -4,8 +4,7 @@
 """
 
 import asyncio
-import re
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 from tavily import TavilyClient
 
@@ -17,6 +16,29 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, project_root)
 
 from src.models.instruction_schemas import TargetInstructionSchema
+from src.search.query_expander import matches_role, query_terms
+
+# 国内招聘平台（排序优先级：越靠前越优先）
+CN_PLATFORM_PRIORITY = [
+    "bosszhipin.com", "zhipin.com", "lagou.com", "liepin.com",
+    "zhaopin.com", "51job.com",
+]
+
+# 非招聘性质的站点（内容站/百科/社媒/应用商店/电商/海外聚合站），命中即排除
+NOISE_DOMAINS = [
+    "wikipedia", "baike", "wiki", "zhihu.com", "csdn.net", "jianshu.com",
+    "juejin.cn", "cnblogs", "segmentfault", "bilibili.com", "weibo.com",
+    "douban.com", "xiaohongshu.com", "youtube.com", "play.google.com",
+    "apps.apple.com", "taobao.com", "jd.com", "amazon.",
+    "tianyancha.com", "qcc.com", "kanzhun.com",
+    "glassdoor", "indeed.com", "linkedin.com",
+]
+
+# 非招聘页面路径特征（新闻/博客/帮助/法务等）
+EXCLUDE_URL_PATTERNS = [
+    "/blog", "/news", "/about", "/contact", "/privacy", "/terms",
+    "/legal", "/investor", "/press", "/help", "/support",
+]
 
 
 class JobFinderConfig:
@@ -26,15 +48,6 @@ class JobFinderConfig:
         self._client = None  # 惰性创建, 避免空 key 时构造即报错
         self.timeout = 30
         self.max_results = 20
-        self.supported_domains = [
-            "greenhouse.io",
-            "lever.co",
-            "myworkdayjobs.com",
-            "ashbyhq.com",
-            "recruitee.com",
-            "careers.smartrecruiters.com",
-            "jobapply.novartis.com"
-        ]
 
     @property
     def client(self) -> TavilyClient:
@@ -79,8 +92,8 @@ class JobFinder:
             # 过滤和提取招聘页面
             job_urls = self._extract_job_urls(results, target_info)
 
-            # 去重并排序
-            unique_urls = list(set(job_urls))
+            # 去重并排序（dict.fromkeys 保序，避免 set 迭代顺序不稳定导致结果不可复现）
+            unique_urls = list(dict.fromkeys(job_urls))
             unique_urls.sort(key=self._sort_key)
 
             return unique_urls[:self.config.max_results]
@@ -90,29 +103,35 @@ class JobFinder:
             return []
 
     def _build_search_query(self, target_info: TargetInstructionSchema) -> str:
-        """构造搜索查询"""
-        # 构建基础查询
-        base_query = f"{target_info.company} {target_info.role}"
+        """
+        构造搜索查询
+
+        不再用 site: 白名单锁死域名——那套只覆盖海外 ATS，国内岗位必然搜不到。
+        改为自然语言查询，由 _is_job_page 负责把噪声站点挡在后面。
+        """
+        parts: List[str] = []
+        if target_info.company:
+            parts.append(target_info.company)
+        # 主岗位名 + 同义变体，扩大召回
+        parts.extend(query_terms(target_info, limit=2))
+        if target_info.location:
+            parts.append(target_info.location)
+        parts.append("招聘")
 
         # 添加关键词
         if target_info.keywords:
-            base_query += f" {' '.join(target_info.keywords)}"
+            parts.append(" ".join(str(k) for k in target_info.keywords))
 
-        # 构建网站限定查询
-        site_conditions = []
-        for domain in self.config.supported_domains:
-            site_conditions.append(f"site:{domain}")
+        query = " ".join(p for p in parts if p)
 
-        # 组合完整查询
         if target_info.remote_only:
-            base_query += " remote work"
+            query += " 远程"
 
         if target_info.exclude_keywords:
-            exclude_terms = ' '.join(target_info.exclude_keywords)
-            exclude_query = f" -{exclude_terms}"
-            return f"{' OR '.join(site_conditions)} {base_query}{exclude_query}"
-        else:
-            return f"{' OR '.join(site_conditions)} {base_query}"
+            exclude_terms = ' '.join(str(k) for k in target_info.exclude_keywords)
+            query += f" -{exclude_terms}"
+
+        return query
 
     async def _search_with_tavily(self, query: str) -> dict:
         """使用 Tavily API 搜索（带 API key 鉴权；TavilyClient 为同步实现，用线程隔离避免阻塞事件循环）"""
@@ -155,60 +174,50 @@ class JobFinder:
         return urls
 
     def _is_job_page(self, url: str, title: str, description: str, target_info: TargetInstructionSchema) -> bool:
-        """判断是否为招聘页面"""
-        # 检查 URL 中的域名
-        if not any(domain in url for domain in self.config.supported_domains):
+        """
+        判断是否为可投递的招聘页面
+
+        域名不做白名单（那套只认海外 ATS），改为「命中噪声站点才拦」；
+        岗位名改为模糊匹配：变体整串命中或 token 命中即可，不再要求一字不差。
+        """
+        url_lower = (url or "").lower()
+        if not url_lower.startswith("http"):
             return False
 
-        # 标题/描述/URL 中是否包含关键词（字段为空时不做该限定，避免公司名缺省导致必然过滤掉所有结果）
-        url_lower = url.lower()
+        # 排除非招聘性质的站点与页面
+        if any(d in url_lower for d in NOISE_DOMAINS):
+            return False
+        if any(p in url_lower for p in EXCLUDE_URL_PATTERNS):
+            return False
+
+        title = (title or "").lower()
+        description = (description or "").lower()
+
+        # 若指定了公司名，标题/描述/域名至少一处出现
         company_lower = (target_info.company or "").strip().lower()
-        role_lower = (target_info.role or "").strip().lower()
-
-        # 若指定了公司名，标题或描述必须出现（URL 命中公司域名也算）
-        if company_lower and company_lower not in title and company_lower not in description:
+        if company_lower and company_lower not in title \
+                and company_lower not in description and company_lower not in url_lower:
             return False
 
-        # 若指定了职位名，标题/描述/URL 至少一处出现
-        if role_lower and role_lower not in title and role_lower not in description and role_lower not in url_lower:
-            return False
-
-        # 排除一些非招聘相关的页面
-        exclude_patterns = [
-            "blog",
-            "news",
-            "about",
-            "contact",
-            "privacy",
-            "terms",
-            "legal",
-            "investor",
-            "press"
-        ]
-
-        for pattern in exclude_patterns:
-            if pattern in url:
+        # 若指定了职位名，模糊命中即可（字段为空时不做该限定，避免必然过滤掉所有结果）
+        role = (target_info.role or "").strip()
+        if role:
+            blob = f"{title} {description} {url_lower}"
+            if not matches_role(
+                blob, role,
+                getattr(target_info, "role_variants", None),
+                target_info.keywords,
+            ):
                 return False
 
         return True
 
     def _sort_key(self, url: str) -> int:
-        """URL 排序键"""
-        # 按域名优先级排序
-        domain_priority = {
-            "greenhouse.io": 0,
-            "lever.co": 1,
-            "myworkdayjobs.com": 2,
-            "ashbyhq.com": 3,
-            "recruitee.com": 4,
-            "careers.smartrecruiters.com": 5,
-            "jobapply.novartis.com": 6
-        }
-
-        for domain in domain_priority:
-            if domain in url:
-                return domain_priority[domain]
-
+        """URL 排序键：国内招聘平台优先，其余（含公司自有招聘站）排后面"""
+        u = (url or "").lower()
+        for i, domain in enumerate(CN_PLATFORM_PRIORITY):
+            if domain in u:
+                return i
         return 999
 
 

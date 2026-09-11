@@ -383,6 +383,13 @@ def main():
         has_score = 'match_score' in df_jobs.columns
         min_score = st.slider("最低匹配分", 0, 100, 60, key="job_min_score")
 
+        # 降级批次提示：本轮没有达标岗位时，展示的是「最接近的岗位」而不是达标的
+        if 'is_qualified' in df_jobs.columns and not df_jobs['is_qualified'].astype(bool).any():
+            st.warning(
+                "⚠️ 最近一轮搜索没有任何岗位达到匹配分门槛，下表是**最接近的岗位**，"
+                "仅供参考，建议不要直接投递。可放宽岗位关键词或换个岗位方向重试。"
+            )
+
         filtered = df_jobs[df_jobs['match_score'] >= min_score] if has_score else df_jobs
         if filtered.empty:
             st.info(f"当前筛选条件下没有岗位 (匹配分 ≥ {min_score})")
@@ -393,8 +400,14 @@ def main():
                 'title': '职位',
                 'company': '公司',
                 'match_score': '匹配分',
+                'is_qualified': '达标',
                 'url': '链接'
-            })[['发现时间', '职位', '公司', '匹配分', '链接']]
+            })
+            cols = ['发现时间', '职位', '公司', '匹配分', '链接']
+            if '达标' in display_jobs.columns:
+                display_jobs['达标'] = display_jobs['达标'].map({1: '✅', 0: '⚠️ 未达门槛'})
+                cols.insert(4, '达标')
+            display_jobs = display_jobs[cols]
             st.dataframe(
                 display_jobs,
                 column_config={
