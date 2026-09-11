@@ -150,12 +150,14 @@ async def search_jobs_node(state: AgentState) -> AgentState:
             model=llm_cfg.get("model") or os.getenv("OPENAI_MODEL"),
         )
 
-        # 执行搜索（run_search_pipeline 内部已按分数 >=60 筛选并排序）
+        # 执行搜索（run_search_pipeline 内部已按分数筛选并排序）
         search_results = await search_pipeline.run_search_pipeline(
             target_info=state["target_instruction"],
             resume=state["parsed_resume"]
         )
 
+        # 只把达标岗位纳入投递队列；未达门槛的降级结果仅用于展示，不自动投递
+        search_results = [r for r in search_results if r.above_threshold]
         qualified_urls = [r.url for r in search_results]
         match_results = [
             {

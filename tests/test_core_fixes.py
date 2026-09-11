@@ -71,23 +71,27 @@ def test_job_page_filter_logic():
     finder = JobFinder(cfg)
 
     info = TargetInstructionSchema(company="", role="", location="")
-    # 无公司/职位要求时, 招聘域名页通过
+    # 无公司/职位要求时, 正常招聘页通过
+    # (域名白名单已下线: 原先只认海外 ATS, 国内公司官网会被全部误杀)
     assert finder._is_job_page(
-        "https://boards.greenhouse.io/example/jobs/123",
-        "Software Engineer",
-        "we are hiring",
-        info,
+        "https://jobs.bytedance.com/position/123", "招聘", "we are hiring", info
     )
-    # 非招聘域名拒绝
-    assert not finder._is_job_page("https://example.com/jobs/1", "Software Engineer", "hiring", info)
+    assert finder._is_job_page("https://example.com/jobs/1", "Software Engineer", "hiring", info)
+    # 噪声站点拒绝(百科/内容站/应用商店等)
+    assert not finder._is_job_page("https://zhuanlan.zhihu.com/p/1", "招聘", "hiring", info)
+    assert not finder._is_job_page("https://apps.apple.com/cn/app/x", "招聘", "hiring", info)
     # blog / about 类页面拒绝
     assert not finder._is_job_page(
-        "https://boards.greenhouse.io/blog/new-post", "Software Engineer", "hiring", info
+        "https://jobs.bytedance.com/blog/new-post", "招聘", "hiring", info
     )
 
+    # 指定了公司名时, 公司必须出现在标题/描述/域名中
     info2 = TargetInstructionSchema(company="字节跳动", role="前端", location="北京")
     assert not finder._is_job_page(
-        "https://boards.greenhouse.io/x", "后端工程师", "hiring backend", info2
+        "https://jobs.meituan.com/x", "美团 前端工程师", "hiring", info2
+    )
+    assert finder._is_job_page(
+        "https://jobs.example.com/x", "字节跳动 前端工程师", "hiring", info2
     )
 
 

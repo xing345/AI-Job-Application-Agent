@@ -17,6 +17,10 @@ class TargetInstructionSchema(BaseModel):
 
     # 搜索参数
     keywords: Optional[List[str]] = Field(default_factory=list, description="附加关键词")
+    role_variants: Optional[List[str]] = Field(
+        default_factory=list,
+        description="目标岗位的近义变体(如 前端工程师 -> 前端开发/Web前端), 用于模糊匹配"
+    )
     exclude_keywords: Optional[List[str]] = Field(default_factory=list, description="排除关键词")
     min_salary: Optional[int] = Field(None, description="最低薪资要求")
 

@@ -123,7 +123,7 @@ class AgentConsole:
             await self._stop_agent()
 
         elif cmd == "search":
-            await self._start_search()
+            await self._start_search(args)
 
         elif cmd == "apply":
             await self._start_apply(args)
@@ -161,7 +161,7 @@ class AgentConsole:
         print("  status            - 显示Agent状态")
         print("  start             - 启动Agent（包含持续监控）")
         print("  stop              - 停止Agent")
-        print("  search            - 开始职位搜索")
+        print("  search [公司…]    - 职位搜索；可指定只在某几家公司的招聘官网找岗")
         print("  apply <urls>      - 申请指定职位的URL")
         print("  diagnose/career   - 岗位诊断模式(根据实际情况找岗+做简历)")
         print("  persona           - 创建/更新用户画像")
@@ -172,7 +172,8 @@ class AgentConsole:
         print()
         print("使用示例:")
         print("  apply https://job1.com/apply https://job2.com/apply")
-        print("  search")
+        print("  search                              # 搜索前会询问目标公司")
+        print("  search 字节跳动 美团                # 只在指定公司的招聘官网找岗")
         print("  dashboard")
         print()
 
@@ -271,15 +272,28 @@ class AgentConsole:
         except Exception as e:
             print(f"❌ 停止失败: {e}")
 
-    async def _start_search(self):
-        """开始职位搜索"""
+    async def _start_search(self, args=None):
+        """
+        开始职位搜索
+
+        可带目标公司：`search 字节跳动 美团`（公司名或招聘官网 URL 均可）。
+        不带参数时会在搜索前交互询问要不要限定公司。
+        """
         if not self.agent:
             print("❌ Agent未初始化")
             return
 
+        companies = [a.strip() for a in (args or []) if a and a.strip()]
+
         try:
+            if companies:
+                self.agent._apply_target_companies(companies)
+                print(f"🏢 只在以下公司的招聘官网找岗: {'、'.join(companies)}")
+
             print("🔍 开始职位搜索...")
-            result = await self.agent.start_job_search_workflow()
+            result = await self.agent.start_job_search_workflow(
+                prompt_companies=not companies
+            )
 
             print(f"\n📊 搜索结果:")
             print(f"  发现职位总数: {result['total_jobs_found']}")

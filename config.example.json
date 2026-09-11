@@ -3,10 +3,16 @@
   "search": {
     "interval_hours": 24,
     "max_results_per_search": 50,
+    "use_browser": true,
+    "use_company_sites": true,
+    "max_companies": 5,
+    "target_companies": [],
     "sources": [
-      "linkedin",
       "bosszhipin",
-      "indeed"
+      "lagou",
+      "liepin",
+      "zhaopin",
+      "51job"
     ]
   },
   "matching": {
