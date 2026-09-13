@@ -245,6 +245,7 @@ def matches_role(text: str, role: str, variants=None, keywords=None) -> bool:
         if len(term) >= 2 and term in t:
             return True
     return any(tok in t for tok in role_match_tokens(role, keywords, variants))
+<<<<<<< HEAD
 
 
 # ====================================================================== #
@@ -424,3 +425,5 @@ def title_direction_relevance(title: str, title_keywords: Optional[Iterable[str]
     strong_hits = sum(1 for kw in kws if kw in t)
     is_occupation = any(w in t for w in TITLE_OCCUPATION_WORDS)
     return strong_hits, is_occupation
+=======
+>>>>>>> ed846ec9dd7507a2e3314e4090b41e098a003037

@@ -277,7 +277,6 @@ class AgentOrchestrator:
                     description TEXT,
                     match_score REAL,
                     is_qualified INTEGER DEFAULT 1,
-                    missing_skills TEXT,
                     searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -287,8 +286,6 @@ class AgentOrchestrator:
                 conn.execute(
                     "ALTER TABLE job_search_log ADD COLUMN is_qualified INTEGER DEFAULT 1"
                 )
-            if "missing_skills" not in cols:
-                conn.execute("ALTER TABLE job_search_log ADD COLUMN missing_skills TEXT")
             now = datetime.now().isoformat()
             for job, match in zip(jobs, matching_results):
                 if isinstance(job, dict):
@@ -301,35 +298,18 @@ class AgentOrchestrator:
                 else:
                     url, title, company, description, score = None, str(job), "", "", None
                     qualified = 1
-                missing_text = self._missing_skills_text(job, match)
                 if score is None:
                     score = getattr(match, "match_score", getattr(match, "score", None))
                 conn.execute(
-                    "INSERT INTO job_search_log (url, title, company, description, match_score, is_qualified, missing_skills, searched_at)"
-                    " VALUES (?,?,?,?,?,?,?,?)",
-                    (url, title, company, description, score, qualified, missing_text, now),
+                    "INSERT INTO job_search_log (url, title, company, description, match_score, is_qualified, searched_at)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (url, title, company, description, score, qualified, now),
                 )
             conn.commit()
             conn.close()
             logger.info(f"已保存 {len(jobs)} 条搜索结果到 Dashboard 数据库")
         except Exception as e:
             logger.warning(f"保存搜索结果失败: {e}")
-
-    @staticmethod
-    def _missing_skills_text(job, match) -> str:
-        """汇总一轮 LLM 匹配的 missing_skills 与二轮画像匹配的 weaknesses，供 Dashboard/终端展示技能差距"""
-        gaps = []
-        mr = job.get("match_result") if isinstance(job, dict) else None
-        if mr is not None and getattr(mr, "missing_skills", None):
-            gaps.extend(str(s) for s in mr.missing_skills if s)
-        if match is not None and getattr(match, "weaknesses_mismatch", None):
-            gaps.extend(str(s) for s in match.weaknesses_mismatch if s)
-        # 保序去重
-        seen = set(); uniq = []
-        for g in gaps:
-            if g not in seen:
-                seen.add(g); uniq.append(g)
-        return "；".join(uniq[:12])
 
     # ------------------------------------------------------------------ #
     # 搜索前的目标公司指定
@@ -466,9 +446,7 @@ class AgentOrchestrator:
                 'task_id': task_id,
                 'total_jobs_found': len(jobs),
                 'high_match_jobs': len(high_match_jobs),
-                'matching_results': matching_results,
-                # 回传职位本身（含真实标题与一轮匹配的 missing_skills），供终端逐职位展示技能差距
-                'jobs': jobs
+                'matching_results': matching_results
             }
 
         except Exception as e:

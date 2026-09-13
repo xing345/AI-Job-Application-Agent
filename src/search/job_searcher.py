@@ -13,7 +13,7 @@ from loguru import logger
 
 from src.models.instruction_schemas import TargetInstructionSchema
 from src.models.schemas import ResumeSchema
-from src.search.query_expander import expand_role_variants, infer_direction
+from src.search.query_expander import expand_role_variants
 from src.search.search_pipeline import SearchPipeline
 
 
@@ -140,13 +140,6 @@ class JobSearcher:
 
         # 岗位名扩展出近义变体，避免「前端工程师」搜不到「Web前端开发」这类岗位
         role_variants = expand_role_variants(target_positions[0], skills)
-        # 用户只给模糊方向（如「AI应用开发」）时推断岗位大类与标题词族，
-        # 后续遍历职位列表按标题语义判相关，不要求用户给出准确岗位名
-        direction = infer_direction(target_positions[0], skills)
-        logger.info(
-            f"方向推断: 「{target_positions[0]}」-> {direction['category']}/"
-            f"{direction['label']}（标题词族 {len(direction['title_keywords'])} 个）"
-        )
 
         target_info = TargetInstructionSchema(
             company="",  # 未指定公司，全局搜索
@@ -154,9 +147,6 @@ class JobSearcher:
             location=locations[0] if locations else None,
             keywords=skills,
             role_variants=role_variants,
-            direction_category=direction["category"],
-            direction_family=direction["key"],
-            title_keywords=direction["title_keywords"],
         )
 
         resume = ResumeSchema(
