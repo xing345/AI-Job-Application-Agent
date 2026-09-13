@@ -154,7 +154,7 @@ class SearchPipeline:
 
         # 第四阶段：筛选和排序
         logger.info("第四阶段：筛选和排序结果...")
-        final_results = self._filter_and_sort_results(match_results, min_score, max_results)
+        final_results = self._filter_and_sort_results(match_results, min_score, max_results, fetch_items)
 
         end_time = time.time()
         logger.info(
@@ -233,12 +233,20 @@ class SearchPipeline:
         交给 JobMatcher 的批量接口，复用同一个浏览器实例并限制并发；
         抓取失败的返回空串，由 _batch_evaluate_match 用职位标题兜底。
         """
-        urls = [it["url"] for it in items if it.get("url")]
+        # XHR 接口已带回完整 JD（SPA 站点）时直接使用，不再渲染详情页（常抓空）
+        prefetched = {
+            it["url"]: (it.get("description") or "")
+            for it in items
+            if it.get("url") and len(it.get("description") or "") >= 100
+        }
+        urls = [it["url"] for it in items if it.get("url") and it["url"] not in prefetched]
         if not urls:
-            return {}
-        return await self.job_matcher.fetch_jd_texts(
+            return prefetched
+        fetched = await self.job_matcher.fetch_jd_texts(
             urls, concurrency=self.jd_concurrency
         )
+        fetched.update(prefetched)
+        return fetched
 
     @staticmethod
     def _weak_jd(title: str, url: str) -> str:
@@ -294,7 +302,8 @@ class SearchPipeline:
         self,
         match_results: Dict[str, MatchResultSchema],
         min_score: int,
-        max_results: int
+        max_results: int,
+        items: List[Dict] = None,
     ) -> List[SearchResult]:
         """
         筛选和排序结果
@@ -303,12 +312,13 @@ class SearchPipeline:
         above_threshold=False —— 用户需要看到「最接近的几个岗位 + 实际分数」，
         而不是一个空列表（空列表无法区分「没抓到」和「抓到了但都不合适」）。
         """
-        # 转换为 SearchResult 对象
+        titles = {it.get("url"): (it.get("title") or "") for it in (items or []) if it.get("url")}
+        # 转换为 SearchResult 对象（优先用发现阶段抓到的真实职位标题）
         search_results = []
         for url, match_result in match_results.items():
             search_result = SearchResult(
                 url=url,
-                title=f"职位申请 - {match_result.match_summary}",
+                title=titles.get(url) or f"职位申请 - {match_result.match_summary}",
                 match_result=match_result,
                 matched_at=time.time(),
                 above_threshold=match_result.score >= min_score,
@@ -356,6 +366,8 @@ class SearchPipeline:
             report += "\n⚠️ 本轮没有岗位达到最低分门槛，以下为最接近的岗位（未达门槛）\n"
 
         for i, result in enumerate(results, 1):
+            matched = "、".join(result.match_result.matched_skills[:6]) or "无"
+            missing = "、".join(result.match_result.missing_skills[:10]) or "无明显差距"
             report += f"""
 {i}. {result.title}
    URL: {result.url}
@@ -363,12 +375,8 @@ class SearchPipeline:
    优先级评分: {result.get_priority_score()}
    是否匹配: {"是" if result.is_qualified else "否"}
    匹配原因: {", ".join(result.match_result.reasons[:3])}
-   已匹配技能: {", ".join(result.match_result.matched_skills[:5])}
-"""
-
-        if results and len(results[0].match_result.missing_skills) > 0:
-            report += f"""
-建议补充的技能: {", ".join(results[0].match_result.missing_skills[:10])}
+   已具备技能: {matched}
+   欠缺技能: {missing}
 """
 
         return report

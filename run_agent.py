@@ -300,15 +300,36 @@ class AgentConsole:
             print(f"  高匹配职位: {result['high_match_jobs']}")
             print(f"  任务ID: {result['task_id']}")
 
-            # 显示高匹配职位（前5个）
+            # 逐职位展示：真实标题 + 两轮匹配分 + 已具备/欠缺技能（按二轮匹配分降序）
             matching_results = result['matching_results']
+            jobs = result.get('jobs', [])
             if matching_results:
-                print("\n🎯 高匹配职位:")
-                for i, match in enumerate(matching_results[:5], 1):
-                    print(f"  {i}. {match.job_id}")
-                    print(f"     匹配分数: {match.match_score}")
+                paired = list(zip(jobs, matching_results)) if len(jobs) == len(matching_results) \
+                    else [(None, m) for m in matching_results]
+                paired.sort(key=lambda pair: getattr(pair[1], 'match_score', 0), reverse=True)
+
+                print("\n🎯 职位匹配结果（按匹配度排序，前 8 个）:")
+                for i, (job, match) in enumerate(paired[:8], 1):
+                    title = (job or {}).get("title") or match.job_id
+                    url = (job or {}).get("url") or match.job_id
+                    stage1 = (job or {}).get("match_score")
+                    print(f"  {i}. {title}")
+                    print(f"     链接: {url}")
+                    score_line = f"     匹配分数: {match.match_score:.0f}"
+                    if stage1 is not None:
+                        score_line += f"（JD 初评 {stage1}）"
+                    print(score_line)
                     if match.strengths_match:
-                        print(f"     优势: {'、'.join(match.strengths_match[:3])}")
+                        print(f"     已具备: {'、'.join(match.strengths_match[:3])}")
+                    gaps = []
+                    mr = (job or {}).get("match_result")
+                    if mr is not None and getattr(mr, "missing_skills", None):
+                        gaps.extend(str(s) for s in mr.missing_skills if s)
+                    if getattr(match, "weaknesses_mismatch", None):
+                        gaps.extend(str(s) for s in match.weaknesses_mismatch if s)
+                    # 保序去重
+                    gaps = list(dict.fromkeys(gaps))
+                    print(f"     欠缺技能: {'、'.join(gaps[:8]) if gaps else '无明显差距'}")
                     print(f"     建议: {match.recommendation}")
                     print()
 

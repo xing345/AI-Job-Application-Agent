@@ -31,7 +31,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 sys.path.insert(0, project_root)
 
 from src.models.instruction_schemas import TargetInstructionSchema
-from src.search.query_expander import query_terms, role_tokens
+from src.search.query_expander import query_terms, role_tokens, title_direction_relevance
 
 # 招聘/职位详情页的 URL 特征（国内招聘平台 + 公司自有招聘站）
 JOB_URL_HINTS = [
@@ -132,7 +132,7 @@ class BrowserJobFinder:
         headless: bool = True,
         timeout_ms: int = 30000,
         max_sites: int = 6,
-        max_jobs_per_site: int = 10,
+        max_jobs_per_site: int = 20,
         max_companies: int = 5,
         interactive: bool = True,
         page_settle_ms: int = 2000,
@@ -280,18 +280,25 @@ class BrowserJobFinder:
         """
         candidates: Dict[str, Dict] = {}
 
-        def add_result(url: str, title: str, preferred_name: str = ""):
-            kind = self._classify_company_result(url)
-            if not kind or self._is_junk_title(title):
+        def add_result(url: str, title: str, preferred_name: str = "", trusted: bool = False):
+            kind = self._classify_company_result(url, trusted=trusted)
+            if not kind or (not trusted and self._is_junk_title(title)):
                 return
             host = urlparse(url).netloc.lower().replace("www.", "")
             if not host or host in candidates:
                 return
             name = preferred_name or self._clean_company_name(title) or host
+            if trusted:
+                # 用户显式 URL 与前面解析出的同名公司主域一致时，继承友好公司名
+                for c in candidates.values():
+                    if self._registrable_domain(c.get("url", "")) == self._registrable_domain(url):
+                        name = c.get("name") or name
+                        break
             candidates[host] = {
                 "name": name,
                 "url": url if kind == "career" else self._homepage_of(url),
                 "career_url": url if kind == "career" else None,
+                "trusted": trusted,
             }
 
         if known_companies:
@@ -301,7 +308,7 @@ class BrowserJobFinder:
                 if not raw:
                     continue
                 if raw.startswith("http"):
-                    add_result(raw, self._host_of(raw), preferred_name=self._host_of(raw))
+                    add_result(raw, self._host_of(raw), preferred_name=self._host_of(raw), trusted=True)
                     continue
                 resolved = await self._resolve_named_company(raw)
                 if resolved:
@@ -368,20 +375,25 @@ class BrowserJobFinder:
             return ".".join(parts[-3:])
         return ".".join(parts[-2:]) if len(parts) >= 2 else host
 
-    def _classify_company_result(self, url: str) -> Optional[str]:
-        """分类搜索结果：career=公司招聘页 home=官网首页 subpage=官网子页 None=噪声"""
-        if not url or self._is_aggregator(url) or self._is_junk(url):
+    def _classify_company_result(self, url: str, trusted: bool = False) -> Optional[str]:
+        """分类搜索结果：career=公司招聘页 home=官网首页 subpage=官网子页 None=噪声。trusted=True 表示用户显式输入的 URL，只做格式校验，跳过聚合/垃圾域名等自动发现降噪过滤"""
+        if not url:
+            return None
+        # trusted（用户显式 URL）只做格式校验；其余自动发现结果走降噪黑名单
+        if not trusted and (self._is_aggregator(url) or self._is_junk(url)):
             return None
         parsed = urlparse(url)
         host = (parsed.netloc or "").lower()
         path = (parsed.path or "/").lower()
-        if not host or any(h in host for h in LOGIN_HOST_HINTS):
+        if not host or parsed.scheme not in ("http", "https"):
             return None
-        if host.endswith((".edu.cn", ".ac.cn", ".edu", ".gov.cn", ".gov")):
+        if not trusted and any(h in host for h in LOGIN_HOST_HINTS):
+            return None
+        if not trusted and host.endswith((".edu.cn", ".ac.cn", ".edu", ".gov.cn", ".gov")):
             return None
         third_party_paths = ("/campus/view", "/xiaozhao/", "/jobfair",
                              "/xuanjiang", "/campus/detail")
-        if any(p in path for p in third_party_paths):
+        if not trusted and any(p in path for p in third_party_paths):
             return None
         if self._host_has_career_prefix(host) or \
                 any(h in path for h in CAREER_URL_HINTS):
@@ -613,7 +625,9 @@ class BrowserJobFinder:
             await self._settle_page(page)
 
             # 1) 钻取到「社会招聘/全部职位/职位搜索」列表页
-            list_href = await self._find_job_list_href(page)
+            #    当前 URL 本身就是职位列表页（用户直达链接）时不再导航走
+            list_href = None if self._looks_like_listing_url(page.url) \
+                else await self._find_job_list_href(page)
             if list_href:
                 try:
                     await page.goto(list_href, wait_until="domcontentloaded",
@@ -623,28 +637,31 @@ class BrowserJobFinder:
                 except Exception:
                     pass
 
-            role_toks = self._role_tokens(target_info)
+            # 1.5) SPA：驱动页面自身「下一页」逐页加载，XHR 监听器会累积抓到每页职位
+            await self._paginate_job_list(page)
 
-            # 2) 站内搜索框输入岗位（主岗位名优先，命中太少时换同义变体重试）
-            scored = await self._score_anchors(page, role_toks)
-            for term in self._fallback_role_terms(target_info):
-                if len(scored) >= 3 or not await self._try_role_search(page, term):
-                    break
-                await self._settle_page(page)
-                scored = await self._score_anchors(page, role_toks)
+            role_toks = self._role_tokens(target_info)
+            title_kws = self._title_keywords(target_info)
+
+            # 2) 遍历整份职位列表（不在站内搜索框输入精确岗位名），
+            #    锚点统一按「方向词族标题相关性」打分排序
+            scored = await self._score_anchors(page, role_toks, title_kws)
 
             # 3) 锚点抽取（过滤导航，只留职位详情）
             if len(scored) < 3 and self._has_captcha_or_wall(await self._safe_inner_text(page)):
                 await self._handle_block(page.url, page)
                 await self._settle_page(page)
-                scored = await self._score_anchors(page, role_toks)
+                scored = await self._score_anchors(page, role_toks, title_kws)
+
+            # 方向明确时只保留标题与方向相关的职位；一个相关的都没有才整体兜底
+            scored = self._prune_by_title_relevance(scored, title_kws)
 
             for score, a in scored:
                 href = a["href"]
                 head = a["text"].split("\n", 1)[0].strip()
                 if href in seen or self._is_nav_text(head) or self._looks_non_job(href):
                     continue
-                if not self._looks_like_job_detail(head, href, role_toks):
+                if not self._looks_like_job_detail(head, href, role_toks, title_kws):
                     continue
                 seen.add(href)
                 jobs.append({
@@ -657,7 +674,7 @@ class BrowserJobFinder:
 
             # 4) XHR/API 兜底（SPA 职位卡片不是 <a> 时，用接口职位+站点 URL 模板）
             if len(jobs) < self.max_jobs_per_site:
-                for item in api_jobs:
+                for item in self._rank_api_jobs(api_jobs, title_kws):
                     href = self._build_company_job_url(page.url, item)
                     text = item.get("title", "")
                     if not href or href in seen or self._is_nav_text(text):
@@ -666,7 +683,8 @@ class BrowserJobFinder:
                     jobs.append({
                         "url": href, "title": text[:80], "company": company_name,
                         "location": item.get("city") or target_info.location or "",
-                        "description": "", "source": "browser_api",
+                        "description": item.get("description") or "",
+                        "source": "browser_api",
                     })
                     if len(jobs) >= self.max_jobs_per_site:
                         break
@@ -683,6 +701,48 @@ class BrowserJobFinder:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _looks_like_listing_url(url: str) -> bool:
+        """当前 URL 本身就是职位列表页（如用户直达的 /campus/positions）时，不再钻取导航走"""
+        path = urlparse((url or "").lower()).path
+        return any(k in path for k in (
+            "/positions", "/position/list", "/joblist", "/job-list", "/jobs",
+            "/social", "/campus/position", "/vacanc",
+        ))
+
+    async def _paginate_job_list(self, page, max_pages: int = 5) -> int:
+        """驱动 SPA 自身的「下一页」控件逐页加载（不碰搜索框），XHR 监听器会累积每页职位"""
+        selectors = (
+            ".btn-next:not(.is-disabled):not([disabled])",
+            "li[title='下一页']:not(.disabled):not(.is-disabled)",
+            "button[aria-label*='下一页']:not([disabled])",
+            "a:has-text('下一页')", "button:has-text('下一页')",
+            "[class*='pagination'] [class*='next']:not([class*='disabled'])",
+        )
+        clicked = 0
+        for _ in range(max(1, max_pages) - 1):
+            stepped = False
+            for sel in selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.count() == 0 or not await loc.is_visible():
+                        continue
+                    cls = ((await loc.get_attribute("class")) or "").lower()
+                    if "disabled" in cls:
+                        continue
+                    await loc.click(timeout=3000)
+                    await self._settle_page(page, light=True)
+                    clicked += 1
+                    stepped = True
+                    break
+                except Exception:
+                    continue
+            if not stepped:
+                break
+        if clicked:
+            logger.info(f"SPA 职位列表自动翻页 {clicked} 次: {page.url}")
+        return clicked
+
     async def _find_job_list_href(self, page):
         """在招聘首页找「全部职位/社会招聘/职位搜索」列表页链接"""
         try:
@@ -694,6 +754,9 @@ class BrowserJobFinder:
             t = (a.get("text") or "").strip()
             href = a.get("href") or ""
             if not href or href.startswith(("javascript:", "#", "mailto:")):
+                continue
+            # 不把 passport/login 等账号主机误当职位列表页（曾把京东带到登录页）
+            if self._host_matches_patterns(urlparse(href).netloc.lower(), LOGIN_HOST_HINTS):
                 continue
             score = 0
             if any(k in t for k in ["社会招聘", "全部职位", "职位搜索", "搜索职位",
@@ -721,16 +784,22 @@ class BrowserJobFinder:
                "home", "login", "register", "about", "contact", "faq", "more", "back"]
         return any(t == n for n in nav)
 
-    def _looks_like_job_detail(self, text: str, href: str, role_toks) -> bool:
-        """判断锚点是否真的是职位详情：URL 像详情页，且文本本身像一个职位"""
+    def _looks_like_job_detail(self, text: str, href: str, role_toks, title_kws=None) -> bool:
+        """判断锚点是否真的是职位详情：URL 像详情页，且文本像职位（职业词/精确 token/方向词族任一命中）"""
         t = (text or "").strip()
         if not JOB_DETAIL_RE.search(href or "") or len(t) < 4:
             return False
         occ = ["工程师", "开发", "设计师", "产品", "运营", "经理", "专员", "架构师",
-               "分析师", "研究员", "主管", "总监", "顾问", "专家",
+               "分析师", "研究员", "主管", "总监", "顾问", "专家", "算法",
                "engineer", "developer", "designer", "manager", "specialist",
-               "analyst", "intern", "scientist"]
+               "analyst", "intern", "scientist", "architect", "营销",
+               "销售", "策划", "公关", "商务", "人力", "财务",
+               "法务", "审计", "采购", "客服", "管培"]
         if any(w in t for w in occ):
+            return True
+        # 方向词族命中（如 AI 方向下的「大模型应用工程师」）也算职位详情
+        family_hits, _ = title_direction_relevance(t, title_kws or [])
+        if family_hits > 0:
             return True
         if role_toks and any(tok in t.lower() for tok in role_toks):
             return True
@@ -747,10 +816,17 @@ class BrowserJobFinder:
                     return
                 u = response.url.lower()
                 list_hints = ("getjoblist", "job/posts", "job/list", "position/list",
-                              "joblist", "job/search", "search/job", "/jobs?",
-                              "vacancy/list", "recruit/list", "queryjob", "jobquery",
-                              "job/page", "position/query")
+                              "positionlist", "positions/list", "joblist", "job-list",
+                              "job/search", "search/job", "/jobs?", "vacancy/list",
+                              "recruit/list", "queryjob", "jobquery", "job/page",
+                              "position/query", "position/page", "queryposition",
+                              "posts/list", "getpositionlist")
+                # 城市/职类字典等「假列表」接口不算职位列表
+                dict_hints = ("citylist", "postcodelist", "typelist", "dict/",
+                              "gametree", "/category", "jobtype", "ranklist")
                 if not any(k in u for k in list_hints):
+                    return
+                if any(k in u for k in dict_hints):
                     return
                 data = await response.json()
                 self._walk_jobs_json(data, found)
@@ -761,13 +837,18 @@ class BrowserJobFinder:
 
     def _walk_jobs_json(self, node, found, depth=0):
         """递归遍历 JSON，提取职位对象（职位名 + 职位ID/链接 + 城市）"""
-        if depth > 9 or len(found) >= 40:
+        if depth > 9 or len(found) >= 60:
             return
         name_keys = ("positionname", "jobname", "postname", "jobtitle", "recruitpost",
                      "position", "name", "title")
         id_keys = ("jobunionid", "positionid", "jobid", "postid", "recruitid", "id")
+        city_keys = ("worklocation", "workcity", "cityname", "city",
+                     "location", "workplace", "address")
+        desc_keys = ("positiondescription", "jobdescription", "description",
+                     "responsibility", "responsibilities", "duty", "jdcontent", "remark")
         if isinstance(node, dict):
-            name, jid, link, cities = None, None, None, []
+            name, jid, link = None, None, None
+            cities, city_s, desc = [], "", ""
             for k, v in node.items():
                 kl = k.lower()
                 if isinstance(v, str) and v.strip():
@@ -778,6 +859,10 @@ class BrowserJobFinder:
                     elif kl in ("positionurl", "pcurl", "detailurl", "joburl",
                                 "posturl", "h5url", "url", "link") and v.startswith("http"):
                         link = v
+                    elif kl in city_keys and not city_s:
+                        city_s = v.strip()
+                    elif kl in desc_keys and len(v.strip()) >= 20 and not desc:
+                        desc = v.strip()
                 elif isinstance(v, (str, int)) and kl in id_keys and str(v).strip():
                     jid = str(v).strip()
                 elif isinstance(v, list) and kl in ("citylist", "cities", "workcitylist"):
@@ -788,7 +873,9 @@ class BrowserJobFinder:
                         not (jid and any(x.get("id") == jid for x in found)):
                     found.append({
                         "title": name, "id": jid or "",
-                        "url": link or "", "city": "、".join(cities),
+                        "url": link or "",
+                        "city": "、".join(cities) or city_s,
+                        "description": desc,
                     })
             for v in node.values():
                 self._walk_jobs_json(v, found, depth + 1)
@@ -808,7 +895,9 @@ class BrowserJobFinder:
         occ = ("工程师", "开发", "经理", "专员", "设计师", "运营", "产品", "分析师",
                "研究员", "主管", "总监", "顾问", "专家", "架构师", "算法", "测试",
                "engineer", "developer", "manager", "intern", "designer",
-               "specialist", "analyst", "scientist", "lead", "director")
+               "specialist", "analyst", "scientist", "lead", "director",
+               "营销", "销售", "策划", "公关", "商务", "人力", "行政",
+               "财务", "法务", "审计", "采购", "客服", "管培")
         # 任何长度都必须含岗位词，过滤地址/分类/枚举对象
         if not any(w in n.lower() for w in occ):
             return False
@@ -822,10 +911,14 @@ class BrowserJobFinder:
         if not jid:
             return ""
         host = urlparse(page_url).netloc.lower()
+        low_url = (page_url or "").lower()
         if "meituan.com" in host:
             return f"https://zhaopin.meituan.com/web/position/detail?jobUnionId={jid}"
         if "bytedance.com" in host:
             return f"https://jobs.bytedance.com/experienced/position/{jid}/detail"
+        if "bilibili.com" in host:
+            kind = "campus" if "/campus/" in low_url else "social"
+            return f"https://jobs.bilibili.com/{kind}/positions/{jid}/detail"
         return ""
 
     async def _extract_jobs_from_portal(self, portal: Dict, target_info) -> List[Dict]:
@@ -835,6 +928,8 @@ class BrowserJobFinder:
         try:
             page = await self._context.new_page()
             page.set_default_timeout(self.timeout_ms)
+            api_jobs, handler = self._make_api_capture()
+            page.on("response", handler)
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
@@ -843,21 +938,21 @@ class BrowserJobFinder:
                 return []
 
             await self._settle_page(page)
+            # SPA：驱动页面自身分页控件逐页加载（不碰搜索框）
+            await self._paginate_job_list(page)
 
             role_toks = self._role_tokens(target_info)
-            scored = await self._score_anchors(page, role_toks)
-
-            # 职位过少：站内搜索框输入岗位（主岗位名优先，命中太少时换同义变体重试）
-            for term in self._fallback_role_terms(target_info):
-                if len(scored) >= 3 or not await self._try_role_search(page, term):
-                    break
-                await self._settle_page(page)
-                scored = await self._score_anchors(page, role_toks)
+            title_kws = self._title_keywords(target_info)
+            # 遍历整份职位列表，不使用站内搜索框；按方向词族给标题打分排序
+            scored = await self._score_anchors(page, role_toks, title_kws)
 
             if len(scored) < 3 and self._has_captcha_or_wall(await self._safe_inner_text(page)):
                 await self._handle_block(url, page)
                 await self._settle_page(page)
-                scored = await self._score_anchors(page, role_toks)
+                scored = await self._score_anchors(page, role_toks, title_kws)
+
+            # 方向明确时只保留标题相关的职位；一个相关的都没有才整体兜底
+            scored = self._prune_by_title_relevance(scored, title_kws)
 
             jobs = []
             seen = set()
@@ -877,6 +972,24 @@ class BrowserJobFinder:
                 if len(jobs) >= self.max_jobs_per_site:
                     break
 
+            # SPA 兜底：职位卡片不是 <a> 时，用 XHR 接口抓到的职位（按方向相关性排序）
+            if len(jobs) < self.max_jobs_per_site:
+                portal_company = self._guess_company(portal.get("title", ""))
+                for item in self._rank_api_jobs(api_jobs, title_kws):
+                    href = item.get("url") or self._build_company_job_url(page.url, item)
+                    text = item.get("title", "")
+                    if not href or href in seen or self._is_nav_text(text):
+                        continue
+                    seen.add(href)
+                    jobs.append({
+                        "url": href, "title": text[:80], "company": portal_company,
+                        "location": item.get("city") or target_info.location or "",
+                        "description": item.get("description") or portal.get("snippet", ""),
+                        "source": "browser_api",
+                    })
+                    if len(jobs) >= self.max_jobs_per_site:
+                        break
+
             logger.info(f"页面 {url} 抽取到 {len(jobs)} 个职位链接")
             return jobs
 
@@ -890,19 +1003,19 @@ class BrowserJobFinder:
                 except Exception:
                     pass
 
-    async def _score_anchors(self, page, role_toks: List[str]) -> List:
-        """抽取锚点并评分排序，返回 [(score, anchor)] 降序"""
+    async def _score_anchors(self, page, role_toks: List[str], title_kws: List[str] = None) -> List:
+        """抽取锚点并评分排序，返回 [(score, anchor)] 降序；title_kws 为方向词族"""
         anchors = await self._collect_anchors(page)
         scored = []
         for a in anchors:
-            score = self._score_anchor(a["text"], a["href"], role_toks)
+            score = self._score_anchor(a["text"], a["href"], role_toks, title_kws)
             if score > 0:
                 scored.append((score, a))
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored
 
     async def _try_role_search(self, page, role: str) -> bool:
-        """招聘站带搜索框时，输入目标岗位触发站内检索"""
+        """招聘站带搜索框时输入岗位触发站内检索（保留备用；主流程已按需求改为遍历职位列表，不再调用）"""
         if not role:
             return False
         selector = (
@@ -963,6 +1076,42 @@ class BrowserJobFinder:
     # ================================================================== #
     # 评分 / 匹配 / 文本工具
     # ================================================================== #
+    def _title_keywords(self, target_info: TargetInstructionSchema) -> List[str]:
+        """方向词族（小写）：遍历职位列表时按标题语义判相关的依据"""
+        kws = getattr(target_info, "title_keywords", None) or []
+        return [str(k).lower() for k in kws if k]
+
+    def _prune_by_title_relevance(self, scored: List, title_kws: List[str]) -> List:
+        """方向明确时只保留标题命中方向词族的锚点；一个相关的都没有时整体保留兜底"""
+        if not scored or not title_kws:
+            return scored
+        related = [
+            (s, a) for s, a in scored
+            if title_direction_relevance(
+                (a.get("text") or "").split("\n", 1)[0], title_kws
+            )[0] > 0
+        ]
+        if related:
+            logger.info(f"标题方向筛选：{len(scored)} 个职位锚点 -> {len(related)} 个相关")
+            return related
+        logger.info("标题方向筛选：无标题命中方向词族，保留全部候选兜底")
+        return scored
+
+    def _rank_api_jobs(self, api_jobs: List[Dict], title_kws: List[str]) -> List[Dict]:
+        """XHR 接口职位：方向相关的排前面；存在相关职位时只返回相关职位"""
+        if not api_jobs:
+            return []
+        if not title_kws:
+            return api_jobs
+        related, others = [], []
+        for it in api_jobs:
+            hits, _ = title_direction_relevance(it.get("title", ""), title_kws)
+            (related if hits > 0 else others).append((hits, it))
+        if not related:
+            return api_jobs
+        related.sort(key=lambda x: x[0], reverse=True)
+        return [it for _, it in related]
+
     def _role_tokens(self, target_info: TargetInstructionSchema) -> List[str]:
         """从目标岗位 + 变体 + 关键词中拆出用于模糊匹配的 token"""
         return role_tokens(
@@ -975,26 +1124,40 @@ class BrowserJobFinder:
         """站内搜索框可用的岗位词序列（主岗位名在前，变体在后）"""
         return query_terms(target_info, limit=3) or []
 
-    def _score_anchor(self, text: str, href: str, role_toks: List[str]) -> int:
-        """给单个锚点评分，>0 才认为是职位链接（只取首行职位名参与评分）"""
+    def _score_anchor(self, text: str, href: str, role_toks: List[str],
+                      title_kws: List[str] = None) -> int:
+        """给单个锚点评分，>0 才认为是职位链接（只取首行职位名参与评分）
+
+        分层打分：通用职业词只给基础分（任何工程师岗都有），方向词族命中给高分，
+        保证目标方向的职位（如 AI 方向下的「大模型应用工程师」）排在无关方向之前。
+        """
         head = (text or "").split("\n", 1)[0].strip()
         t = head.lower()
         h = href.lower()
         if len(head) < 2 or len(head) > 120:
             return 0
+        if self._looks_non_job(href) or any(x in t for x in ["登录", "注册", "下载", "帮助"]):
+            return 0
+        occ_words = ["工程师", "开发", "设计师", "产品经理", "运营",
+                      "架构师", "分析师", "研究员", "实习", "算法",
+                      "engineer", "developer", "designer", "manager",
+                      "scientist", "architect", "营销", "销售", "策划",
+                      "公关", "商务", "人力", "财务", "法务", "管培"]
+        occ_hit = any(tok in t for tok in occ_words)
+        family_hits, _ = title_direction_relevance(head, title_kws or [])
+        hit_tokens = [tok for tok in (role_toks or []) if tok in t]
+        # 标题本身必须像一个职位（职业词/方向词族/精确 token 至少命中一个），
+        # 仅 URL 像详情页不算（职能/导航链接也可能用 /position/ 路径）
+        if not (occ_hit or family_hits > 0 or hit_tokens):
+            return 0
         score = 0
         if any(hint in h for hint in JOB_URL_HINTS):
             score += 3
-        if any(tok in t for tok in ["工程师", "开发", "设计师", "产品经理", "运营",
-                                    "架构师", "分析师", "研究员", "实习", "engineer",
-                                    "developer", "designer", "manager"]):
+        if occ_hit:
             score += 3
-        hit_tokens = [tok for tok in role_toks if tok in t]
+        # 方向词族命中（标题语义相关）：权重最高，相关方向职位排最前
+        score += 6 * family_hits
         score += 2 * len(hit_tokens)
-        if score == 0:
-            return 0
-        if self._looks_non_job(href) or any(x in t for x in ["登录", "注册", "下载", "帮助"]):
-            return 0
         return score
 
     def _looks_job_portal(self, url: str, title: str, snippet: str) -> bool:
@@ -1011,9 +1174,22 @@ class BrowserJobFinder:
         u = (url or "").lower()
         return any(hint in u for hint in NON_JOB_HINTS)
 
+    @staticmethod
+    def _host_matches_patterns(host: str, patterns) -> bool:
+        """主机名命中黑名单：含点模式按主域/子域精确匹配（避免 query/path 误伤），无点模式保留子串匹配"""
+        host = (host or "").lower()
+        for pat in patterns:
+            pat = pat.lower()
+            if "." in pat and not pat.endswith("."):
+                if host == pat or host.endswith("." + pat):
+                    return True
+            elif pat in host:
+                return True
+        return False
+
     def _is_aggregator(self, url: str) -> bool:
-        u = (url or "").lower()
-        return any(d in u for d in AGGREGATOR_DOMAINS)
+        host = urlparse(url or "").netloc.lower()
+        return self._host_matches_patterns(host, AGGREGATOR_DOMAINS)
 
     def _url_has_career_hint(self, url: str) -> bool:
         p = urlparse((url or "").lower())
@@ -1026,8 +1202,8 @@ class BrowserJobFinder:
         return any(host.startswith(p) for p in CAREER_SUBDOMAIN_PREFIXES)
 
     def _is_junk(self, url: str) -> bool:
-        u = (url or "").lower()
-        return any(d in u for d in JUNK_DOMAINS)
+        host = urlparse(url or "").netloc.lower()
+        return self._host_matches_patterns(host, JUNK_DOMAINS)
 
     def _is_junk_title(self, title: str) -> bool:
         t = (title or "")
@@ -1037,11 +1213,11 @@ class BrowserJobFinder:
 
     def _portal_score(self, url: str, title: str) -> int:
         """门户排序：国内垂直招聘平台优先，其次公司自有招聘站"""
-        u = (url or "").lower()
+        host = urlparse(url or "").netloc.lower()
         t = (title or "").lower()
         score = 0
         for i, d in enumerate(CN_JOB_PLATFORMS):
-            if d in u:
+            if d in host:
                 score += 20 - i
         if self._url_has_career_hint(url):
             score += 8
