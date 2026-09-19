@@ -57,7 +57,9 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         error_message TEXT,
-        search_source TEXT
+        search_source TEXT,
+        original_jd TEXT,
+        user_persona_snapshot TEXT
     )
     ''')
 
@@ -84,7 +86,9 @@ def init_db():
         confidence_score REAL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_used TIMESTAMP,
-        is_active BOOLEAN DEFAULT 1
+        is_active BOOLEAN DEFAULT 1,
+        category TEXT,
+        examples_count INTEGER DEFAULT 0
     )
     ''')
 
@@ -97,9 +101,31 @@ def init_db():
         company TEXT,
         description TEXT,
         match_score REAL,
+        is_qualified INTEGER DEFAULT 1,
         searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
+
+    # 表已存在时 CREATE TABLE IF NOT EXISTS 不会补列：这里按列补齐，
+    # 避免 Dashboard 先于 Agent 建库时缺列（is_qualified/达标标记就会读不到）
+    expected_columns = {
+        "job_applications": [
+            ("error_message", "TEXT"), ("search_source", "TEXT"),
+            ("original_jd", "TEXT"), ("user_persona_snapshot", "TEXT"),
+        ],
+        "strategy_rules": [
+            ("category", "TEXT"), ("examples_count", "INTEGER DEFAULT 0"),
+        ],
+        "job_search_log": [
+            ("is_qualified", "INTEGER DEFAULT 1"),
+        ],
+    }
+    for tbl, cols in expected_columns.items():
+        cursor.execute(f"PRAGMA table_info({tbl})")
+        existing = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in cols:
+            if col_name not in existing:
+                cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_type}")
 
     conn.commit()
     conn.close()
@@ -179,12 +205,19 @@ def load_search_log():
         st.error(f"加载搜索结果失败: {e}")
         return pd.DataFrame()
 
-def get_kpi_cards(df):
-    """生成KPI卡片"""
+def get_kpi_cards(df, df_apps=None):
+    """
+    生成KPI卡片。
+
+    「已发现岗位/高分岗位」来自搜索结果表 job_search_log，
+    「已投递/已面试」来自申请表 job_applications —— 之前两者都拿申请表算，
+    只搜过岗位还没投递时，KPI 会一直显示 0，看着像 Agent 什么都没干。
+    """
+    df_apps = df if df_apps is None else df_apps
     total_jobs = len(df)
     high_score_jobs = len(df[df['match_score'] >= 80]) if 'match_score' in df.columns else 0
-    applied_jobs = len(df[df['status'] == 'APPLIED']) if 'status' in df.columns else 0
-    interview_jobs = len(df[df['status'] == 'INTERVIEW_INVITE']) if 'status' in df.columns else 0
+    applied_jobs = len(df_apps[df_apps['status'] == 'APPLIED']) if 'status' in df_apps.columns else 0
+    interview_jobs = len(df_apps[df_apps['status'] == 'INTERVIEW_INVITE']) if 'status' in df_apps.columns else 0
     success_rate = (interview_jobs / applied_jobs * 100) if applied_jobs > 0 else 0
 
     # 注: 无历史基线数据, 不展示伪造的增量
@@ -360,10 +393,11 @@ def main():
         df_applications = load_applications_data()
         df_reflections = load_reflections_data()
         df_rules = load_strategy_rules()
+        df_search = load_search_log()
 
     # KPI卡片
     st.subheader("📈 核心指标")
-    kpi_cards = get_kpi_cards(df_applications)
+    kpi_cards = get_kpi_cards(df_search, df_applications)
     cols = st.columns(len(kpi_cards))
 
     for i, card in enumerate(kpi_cards):
@@ -378,17 +412,23 @@ def main():
     # ============ 找到的岗位 ============
     st.markdown("---")
     st.subheader("🎯 找到的岗位")
-    df_jobs = load_search_log()
+    df_jobs = df_search
     if not df_jobs.empty:
         has_score = 'match_score' in df_jobs.columns
         min_score = st.slider("最低匹配分", 0, 100, 60, key="job_min_score")
 
-        # 降级批次提示：本轮没有达标岗位时，展示的是「最接近的岗位」而不是达标的
-        if 'is_qualified' in df_jobs.columns and not df_jobs['is_qualified'].astype(bool).any():
-            st.warning(
-                "⚠️ 最近一轮搜索没有任何岗位达到匹配分门槛，下表是**最接近的岗位**，"
-                "仅供参考，建议不要直接投递。可放宽岗位关键词或换个岗位方向重试。"
-            )
+        # 降级批次提示：只按「最近一轮搜索」判断 —— 整表里只要有过未达标岗位
+        # 就一直报警，会让人误以为当前这轮也没达标
+        latest = df_jobs
+        if 'searched_at' in df_jobs.columns and df_jobs['searched_at'].notna().any():
+            latest = df_jobs[df_jobs['searched_at'] == df_jobs['searched_at'].max()]
+        if 'is_qualified' in latest.columns and len(latest):
+            qualified_flags = latest['is_qualified'].fillna(1).astype(float).astype(bool)
+            if not qualified_flags.any():
+                st.warning(
+                    "⚠️ 最近一轮搜索没有任何岗位达到匹配分门槛，下表是**最接近的岗位**，"
+                    "仅供参考，建议不要直接投递。可放宽岗位关键词或换个岗位方向重试。"
+                )
 
         filtered = df_jobs[df_jobs['match_score'] >= min_score] if has_score else df_jobs
         if filtered.empty:

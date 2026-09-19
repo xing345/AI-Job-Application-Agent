@@ -140,6 +140,9 @@ class AgentConsole:
         elif cmd == "learn":
             await self._show_learning()
 
+        elif cmd in ("chat", "talk", "聊"):
+            await self._enter_chat()
+
         elif cmd == "emergency":
             await self._emergency_stop()
 
@@ -166,6 +169,7 @@ class AgentConsole:
         print("  diagnose/career   - 岗位诊断模式(根据实际情况找岗+做简历)")
         print("  persona           - 创建/更新用户画像")
         print("  dashboard         - 启动监控Dashboard")
+        print("  chat              - 自由聊天（询问岗位/补充信息，:q 退出）")
         print("  learn             - 显示学习洞察")
         print("  emergency         - 紧急停止")
         print("  exit              - 退出程序")
@@ -500,6 +504,37 @@ class AgentConsole:
 
         except Exception as e:
             print(f"❌ 获取学习洞察失败: {e}")
+
+    async def _enter_chat(self):
+        """进入自由聊天模式：可随时提问，或用「记住：xxx」在不改简历的情况下补充信息"""
+        if not self.agent:
+            print("❌ Agent未初始化")
+            return
+
+        print("\n" + "=" * 50)
+        print("💬 自由聊天模式")
+        print("=" * 50)
+        print("· 直接输入问题即可，例如：我现在适合投哪些岗位？/ 帮我分析下第2个岗位")
+        print("· 输入「记住：期望薪资20-25K，只考虑成都」可永久补充信息（不改简历）")
+        print("· 输入 :q / exit / quit 返回控制台")
+        print()
+
+        while True:
+            try:
+                user_msg = input("你> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n退出聊天模式")
+                break
+            if not user_msg:
+                continue
+            if user_msg.lower() in (":q", "q", "exit", "quit", "退出"):
+                print("已退出聊天模式，返回控制台")
+                break
+            try:
+                reply = await self.agent.chat(user_msg)
+                print(f"\nAgent> {reply}\n")
+            except Exception as e:
+                print(f"❌ 聊天出错: {e}")
 
     async def _emergency_stop(self):
         """紧急停止"""

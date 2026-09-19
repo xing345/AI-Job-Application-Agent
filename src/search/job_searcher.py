@@ -13,7 +13,7 @@ from loguru import logger
 
 from src.models.instruction_schemas import TargetInstructionSchema
 from src.models.schemas import ResumeSchema
-from src.search.query_expander import expand_role_variants
+from src.search.query_expander import expand_role_variants, infer_direction
 from src.search.search_pipeline import SearchPipeline
 
 
@@ -54,6 +54,13 @@ class JobSearcher:
         max_companies = int(search_cfg.get("max_companies", 5))
         target_companies = search_cfg.get("target_companies") or None
         browser_headless = bool(browser_cfg.get("headless", True))
+        # 进入 JD 阶段的候选上限、最终返回岗位上限（可在 config.search 调整）
+        jd_fetch_limit = int(search_cfg.get("jd_fetch_limit", 40))
+        max_final_results = int(search_cfg.get("max_results_per_search", 15))
+        # 默认按官网类别+列表遍历找岗；use_tavily_search=true 才额外开关键词搜索
+        use_tavily_search = bool(search_cfg.get("use_tavily_search", False))
+        # 招聘类型：默认只找校招（campus），可在 config.search.recruit_type 改为 social/all
+        self.recruit_type = (search_cfg.get("recruit_type") or "campus").strip().lower()
 
         self.pipeline = SearchPipeline(
             self.tavily_api_key,
@@ -66,6 +73,9 @@ class JobSearcher:
             use_company_sites=use_company_sites,
             max_companies=max_companies,
             target_companies=target_companies,
+            jd_fetch_limit=jd_fetch_limit,
+            max_final_results=max_final_results,
+            use_tavily_search=use_tavily_search,
         )
 
     def set_target_companies(self, companies: List[str] = None) -> None:
@@ -139,14 +149,27 @@ class JobSearcher:
         skills = list(dict.fromkeys(skills))
 
         # 岗位名扩展出近义变体，避免「前端工程师」搜不到「Web前端开发」这类岗位
-        role_variants = expand_role_variants(target_positions[0], skills)
+        primary_role = target_positions[0]
+        role_variants = expand_role_variants(primary_role, skills)
+
+        # 模糊方向 -> 岗位大类/标题词族（纯规则、零 API 成本），
+        # 下传给浏览器阶段：只看职位标题就能判断与目标方向是否相关
+        direction = infer_direction(primary_role, skills)
+        logger.info(
+            f"方向推断: 「{primary_role}」-> {direction['category']}/{direction['label']}"
+            f"（标题词族 {len(direction['title_keywords'])} 个）"
+        )
 
         target_info = TargetInstructionSchema(
             company="",  # 未指定公司，全局搜索
-            role=target_positions[0],
+            role=primary_role,
             location=locations[0] if locations else None,
             keywords=skills,
             role_variants=role_variants,
+            direction_family=direction["key"],
+            direction_category=direction["category"],
+            title_keywords=direction["title_keywords"],
+            recruit_type=self.recruit_type,
         )
 
         resume = ResumeSchema(

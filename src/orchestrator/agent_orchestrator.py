@@ -39,7 +39,7 @@ class AgentOrchestrator:
         Args:
             config: 配置信息
         """
-        self.config = config or self._get_default_config()
+        self.config = self._merge_config(config)
         self.db_path = str(Path(project_root) / "data" / "agent_state.db")
 
         # 初始化各个模块
@@ -50,6 +50,11 @@ class AgentOrchestrator:
         self.form_filler = None
         self.reflection_system = None
         self.email_listener = None
+
+        # 自由聊天：对话历史、惰性 LLM 客户端、用户补充笔记（不改简历）
+        self._chat_history: List[Dict[str, str]] = []
+        self._chat_llm = None
+        self.notes_path = str(Path(project_root) / 'data' / 'user_notes.json')
 
         # 状态控制
         self.is_running = False
@@ -62,6 +67,26 @@ class AgentOrchestrator:
             'learning_cycles': 0,
             'last_update': datetime.now().isoformat()
         }
+
+    def _merge_config(self, config: Dict = None) -> Dict:
+        """
+        用户配置覆盖默认配置（按键深合并）。
+
+        之前是 `config or default`：只要 config.json 存在就整份替换默认值，
+        配置文件里少写一个段（如 matching/email）后面 self.config['matching']
+        就直接 KeyError。
+        """
+        merged = self._get_default_config()
+
+        def overlay(base: Dict, extra: Dict) -> Dict:
+            for key, value in (extra or {}).items():
+                if isinstance(value, dict) and isinstance(base.get(key), dict):
+                    overlay(base[key], value)
+                else:
+                    base[key] = value
+            return base
+
+        return overlay(merged, config or {})
 
     def _get_default_config(self) -> Dict:
         """获取默认配置"""
@@ -214,6 +239,16 @@ class AgentOrchestrator:
         logger.info("开始生成用户画像...")
 
         try:
+            # 用户在自由聊天中补充的信息（不改简历）一并纳入画像生成
+            notes = self.load_user_notes()
+            if notes:
+                note_text = "\n".join(f"- {n['content']}" for n in notes)
+                user_prompt = (
+                    (user_prompt or "") +
+                    "\n\n【用户后续补充的信息（简历未写，需纳入画像）】\n" + note_text
+                )
+                logger.info(f"已并入 {len(notes)} 条用户补充笔记到画像")
+
             # 初始化动态用户画像生成器
             generator = DynamicUserPersonaGenerator()
 
@@ -446,6 +481,7 @@ class AgentOrchestrator:
                 'task_id': task_id,
                 'total_jobs_found': len(jobs),
                 'high_match_jobs': len(high_match_jobs),
+                'jobs': jobs,                      # 调用方（控制台）要展示标题/链接
                 'matching_results': matching_results
             }
 
@@ -769,7 +805,7 @@ class AgentOrchestrator:
         """
         from src.models.instruction_schemas import TargetInstructionSchema
         from src.models.schemas import ResumeSchema
-        from src.search.query_expander import expand_role_variants
+        from src.search.query_expander import expand_role_variants, infer_direction
 
         locations = []
         if isinstance(self.user_persona, dict):
@@ -777,6 +813,9 @@ class AgentOrchestrator:
             locations = obj.get("location_preference") or []
 
         role = direction.target_positions[0] if direction.target_positions else direction.title
+        # 方向推断：给浏览器阶段「按标题判方向」的词族，
+        # 否则找岗阶段没有方向过滤，会把该站列表里所有岗位都收进来
+        inferred = infer_direction(role, direction.keywords)
         target_info = TargetInstructionSchema(
             company="",
             role=role,
@@ -784,6 +823,10 @@ class AgentOrchestrator:
             keywords=direction.keywords,
             # 岗位名扩展出近义变体，避免精确匹配导致搜不到岗位
             role_variants=expand_role_variants(role, direction.keywords),
+            direction_family=inferred["key"],
+            direction_category=inferred["category"],
+            title_keywords=inferred["title_keywords"],
+            recruit_type=(self.config.get('search', {}).get('recruit_type') or 'campus'),
         )
         resume = ResumeSchema(
             name=(self.user_persona or {}).get("name", ""),
@@ -1049,6 +1092,174 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"停止Agent时出错: {e}")
             raise
+
+    # ================================================================== #
+    # 自由聊天（chat）：不改简历也能随时补充信息、询问岗位与 Agent 状态
+    # ================================================================== #
+    def _get_chat_llm(self):
+        """惰性创建聊天用 LLM 客户端"""
+        if self._chat_llm is None:
+            from src.utils.llm_client import LLMClient
+            llm_cfg = self.config.get("llm", {}) or {}
+            self._chat_llm = LLMClient(
+                model=llm_cfg.get("model"),
+                api_key=llm_cfg.get("api_key"),
+                base_url=llm_cfg.get("base_url"),
+            )
+        return self._chat_llm
+
+    def load_user_notes(self) -> List[Dict[str, str]]:
+        """读取用户补充笔记 data/user_notes.json"""
+        try:
+            note_path = Path(self.notes_path)
+            if note_path.exists():
+                with open(note_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.warning(f"读取用户补充笔记失败: {e}")
+        return []
+
+    def _save_user_note(self, content: str) -> None:
+        """追加一条用户补充笔记"""
+        notes = self.load_user_notes()
+        notes.append({
+            "content": content.strip(),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        Path(self.notes_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(self.notes_path, "w", encoding="utf-8") as f:
+            json.dump(notes, f, ensure_ascii=False, indent=2)
+        logger.info(f"已保存用户补充笔记: {content[:30]}")
+
+    def _persona_brief(self) -> str:
+        """画像摘要（供聊天 system prompt 使用）"""
+        p = self.user_persona
+        if p is None:
+            return "（尚未生成用户画像，可提示用户先运行 persona 或 diagnose）"
+        lines = [f"姓名: {getattr(p, 'name', '未知')}"]
+        obj = getattr(p, "career_objective", None)
+        if obj is not None:
+            tp = getattr(obj, "target_positions", None)
+            if tp:
+                lines.append(f"目标职位: {'、'.join(tp)}")
+            ind = getattr(obj, "preferred_industries", None)
+            if ind:
+                lines.append(f"偏好行业: {'、'.join(ind)}")
+            loc = getattr(obj, "location_preference", None)
+            if loc:
+                lines.append(f"地点偏好: {'、'.join(loc)}")
+            sal = getattr(obj, "salary_expectation", None)
+            if sal:
+                lines.append(f"薪资期望: {sal}")
+        tech = getattr(p, "technical_skills", None)
+        if tech:
+            skills = []
+            if isinstance(tech, dict):
+                for k, v in list(tech.items())[:6]:
+                    if isinstance(v, list):
+                        skills.append(f"{k}({'/'.join(v[:6])})")
+                    else:
+                        skills.append(str(k))
+            if skills:
+                lines.append(f"技能: {'；'.join(skills)}")
+        strengths = getattr(p, "strengths", None)
+        if strengths:
+            lines.append(f"核心优势: {'、'.join(strengths[:5])}")
+        return "\n".join(lines)
+
+    def _recent_jobs_brief(self, limit: int = 10) -> str:
+        """最近搜索入库的岗位（供聊天引用）"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT title, company, match_score, is_qualified, searched_at "
+                "FROM job_search_log ORDER BY rowid DESC LIMIT ?",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            if not rows:
+                return "（暂无搜索记录，可先运行 search）"
+            return "\n".join(
+                f"- {r[0] or '未命名岗位'}｜{r[1] or '未知公司'}｜"
+                f"初评分 {r[2]}｜{'达标' if r[3] else '未达标'}"
+                for r in rows
+            )
+        except Exception:
+            return "（搜索记录读取失败）"
+
+    def _build_chat_system_prompt(self) -> str:
+        """组装聊天系统提示"""
+        notes = self.load_user_notes()
+        notes_text = "\n".join(f"- {n['content']}" for n in notes) or "（暂无）"
+        return f"""你是 Auto Job Agent（自动求职助手）的对话助手。你可以和用户自由交流求职相关的任何问题。
+
+【当前用户画像】
+{self._persona_brief()}
+
+【用户补充的信息（用户口述、简历未写，回答时优先采纳）】
+{notes_text}
+
+【最近搜索到的岗位】
+{self._recent_jobs_brief()}
+
+【你能做什么 / 控制台命令】
+- persona：解析简历生成画像；search [公司名]：搜索岗位；apply <url>：自动填表（最终提交需用户确认）
+- diagnose/career：岗位诊断与定制简历；start：持续监控（定时搜索+邮箱监听拒信并自反思）
+- learn：查看反思结论；dashboard：打开监控面板
+- 安全约束：Agent 不会自动点击最终提交按钮，遇到验证码/登录墙会暂停等用户处理
+
+【回答要求】
+1. 用中文，简洁务实，基于上面的画像、补充信息和岗位记录回答，不要编造不存在的岗位或分数；
+2. 用户说「记住：xxx」「补充：xxx」时，系统会自动持久化，你正常确认即可，告诉用户这些信息不改简历、
+   但下次运行 persona 时会并入画像，也会在本次对话中作为背景；
+3. 用户想执行某个命令时，明确告诉他该输入什么命令；不要假装命令已经执行。"""
+
+    async def chat(self, message: str) -> str:
+        """
+        自由聊天一轮。
+
+        - 「记住：/补充：」开头：持久化补充信息，不调用 LLM；
+        - 其余问题：携带多轮历史调用 LLM 回答。
+        """
+        message = (message or "").strip()
+        if not message:
+            return "请输入你想说的内容（输入 :q 退出聊天）。"
+
+        # 显式补充信息：落盘到 user_notes.json
+        m = re.match(r"^(?:记住|补充|note)[：:]\s*(.+)$", message, flags=re.IGNORECASE)
+        if m:
+            note = m.group(1).strip()
+            self._save_user_note(note)
+            self._chat_history.append({"role": "user", "content": message})
+            reply = (
+                f"✅ 已记住（不会修改你的简历文件）：{note}\n"
+                "下次运行 persona 生成画像时会自动并入；本次对话中我也会参考这条信息。"
+            )
+            self._chat_history.append({"role": "assistant", "content": reply})
+            return reply
+
+        try:
+            llm = self._get_chat_llm()
+            # 只保留最近 12 轮，避免上下文过长
+            history = self._chat_history[-24:]
+            reply = await llm.generate_response(
+                prompt=message,
+                system_prompt=self._build_chat_system_prompt(),
+                messages=history,
+            )
+            self._chat_history.append({"role": "user", "content": message})
+            self._chat_history.append({"role": "assistant", "content": reply})
+            return reply
+        except Exception as e:
+            logger.error(f"聊天调用失败: {e}")
+            return f"❌ 聊天服务暂时不可用：{e}（请检查 .env 中的 LLM 配置）"
+
+    def reset_chat_history(self) -> None:
+        """清空对话历史（补充笔记不受影响）"""
+        self._chat_history = []
 
     async def emergency_stop(self):
         """紧急停止"""

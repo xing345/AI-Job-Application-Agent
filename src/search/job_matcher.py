@@ -21,6 +21,37 @@ sys.path.insert(0, project_root)
 
 from src.models.schemas import ResumeSchema
 from src.models.instruction_schemas import TargetInstructionSchema
+from src.search.hitl import BlockHandler
+
+# 浏览器内执行：定位页面里的「JD 正文块」。
+# 直接取 body 会把导航/筛选/页脚一起塞给 LLM（正文被截断），
+# 这里挑「命中 JD 关键词最多、且块本身尽量小」的容器。
+_JD_BLOCK_JS = r"""() => {
+  const KEYS = ["职位描述","岗位职责","工作职责","任职要求","任职资格","岗位要求",
+    "工作要求","职位要求","工作内容","招聘要求","岗位描述","job description",
+    "responsibilities","requirements","qualifications","about the role","what you"];
+  let best = "", bestScore = 0;
+  const els = document.querySelectorAll("div,section,article,main,td,li,form");
+  for (let i = 0; i < els.length && i < 3000; i++) {
+    const t = (els[i].innerText || "").trim();
+    if (t.length < 80 || t.length > 8000) continue;
+    const low = t.toLowerCase();
+    let hits = 0;
+    for (const k of KEYS) if (low.includes(k.toLowerCase())) hits++;
+    if (!hits) continue;
+    // 命中越多越好；块越小越可能正是 JD 容器
+    const score = hits * 1000 - t.length / 100;
+    if (score > bestScore) { bestScore = score; best = t; }
+  }
+  return best;
+}"""
+
+# JD 正文起点的关键词（清文本时用来丢掉前面的导航噪声）
+_JD_START_KEYS = (
+    "职位描述", "岗位职责", "工作职责", "任职要求", "任职资格", "岗位要求",
+    "工作内容", "招聘要求", "岗位描述", "job description", "responsibilities",
+    "requirements", "qualifications", "about the role",
+)
 
 
 class MatchResultSchema(BaseModel):
@@ -35,7 +66,8 @@ class MatchResultSchema(BaseModel):
 
 class JobMatcherConfig:
     """匹配器配置"""
-    def __init__(self, openai_api_key: str = None, base_url: str = None, model: str = None):
+    def __init__(self, openai_api_key: str = None, base_url: str = None, model: str = None,
+                 headless: bool = True):
         # 未显式传入时从 config.json 的 llm 段读取（环境变量兜底）
         llm_cfg = {}
         try:
@@ -58,6 +90,15 @@ class JobMatcherConfig:
         )
         self.playwright_timeout = 30000  # 毫秒（原 30 会导致所有 JD 抓取 30ms 超时）
         self.retry_attempts = 3
+        # JD 抓取浏览器是否无头；与发现阶段一致用可见浏览器，便于人工过验证
+        self.headless = headless
+        # 真实 Chrome 指纹，去掉 HeadlessChrome 标识
+        self.user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        # HITL：详情页需要登录 / 验证码时停下汇报给用户处理（None 则按 headless 自建）
+        self.block_handler = None
 
 
 class JobMatcher:
@@ -66,10 +107,18 @@ class JobMatcher:
     def __init__(self, config: JobMatcherConfig):
         self.config = config
         self.logger = logger.bind(module="job_matcher")
+        # 统一的 HITL 阻断处理器；串行锁保证并发抓 JD 时只暂停一次
+        self.block_handler = config.block_handler or BlockHandler(
+            interactive=True, headless=config.headless
+        )
+        self._block_lock = asyncio.Lock()
+        # 真实浏览器指纹（_new_stealth_context 用）
+        self.user_agent = config.user_agent
 
     async def fetch_jd_text(self, url: str) -> str:
         """
-        抓取页面中的 JD 文本内容
+        抓取单个页面的 JD 文本（单页调试/小批量用；批量请用 fetch_jd_texts）
+        失败返回空串（与批量接口一致，交由调用方用职位标题兜底）
 
         Args:
             url: 招聘页面 URL
@@ -79,46 +128,122 @@ class JobMatcher:
         """
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-
+                browser = await p.chromium.launch(headless=self.config.headless)
                 try:
-                    await page.goto(url, timeout=self.config.playwright_timeout)
-                    await asyncio.sleep(2)  # 等待页面加载
-
-                    jd_text = await self._extract_page_text(page)
-
-                    self.logger.info(f"成功抓取 JD: {url}")
-                    return jd_text
-
-                except Exception as e:
-                    self.logger.error(f"抓取 JD 失败: {url}, 错误: {e}")
-                    return f"页面加载失败: {str(e)}"
+                    context = await self._new_stealth_context(browser)
+                    page = await context.new_page()
+                    text, blocked = await self._render_job_page(page, url, 2.0)
+                    if blocked:
+                        self.logger.warning(f"JD 页面被拦截（{blocked}）: {url}")
+                    elif text:
+                        self.logger.info(f"成功抓取 JD: {url}（{len(text)} 字）")
+                    return text
                 finally:
                     await browser.close()
 
         except Exception as e:
-            self.logger.error(f"Playwright 启动失败: {e}")
-            return f"无法访问页面: {str(e)}"
+            self.logger.error(f"抓取 JD 失败: {url}, 错误: {e}")
+            return ""
+
+    # 反爬验证页 / 登录墙 / 非岗位页特征；命中说明拿到的不是 JD 正文
+    _BLOCK_HINTS = (
+        "cloudflare", "cf-browser-verification", "checking your browser", "人机验证",
+        "安全验证", "安全检查", "滑块", "拖动滑块", "验证码", "行为验证",
+        "访问被拒绝", "access denied", "enable javascript and cookies",
+        "请完成安全验证", "网络不给力，请稍后重试",
+    )
+    _LOGINWALL_HINTS = ("用户登录", "请登录", "账号密码登录", "扫码登录", "sign in to continue")
+
+    def _is_blocked_page(self, text: str) -> str:
+        """识别拦截页：返回 'captcha' / 'login' / ''（正常页）"""
+        low = (text or "").lower()
+        if any(h in low for h in self._BLOCK_HINTS):
+            return "captcha"
+        # 登录墙：正文极短且以登录提示为主
+        if len(low) < 800 and any(h in low for h in self._LOGINWALL_HINTS):
+            return "login"
+        return ""
+
+    async def _new_stealth_context(self, browser):
+        """创建带真实浏览器指纹的上下文"""
+        context = await browser.new_context(
+            user_agent=self.user_agent,
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            viewport={"width": 1920, "height": 1080},
+        )
+        # 隐藏自动化特征 navigator.webdriver
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
+        return context
+
+    async def _render_job_page(self, page, url: str, settle_seconds: float) -> tuple:
+        """
+        打开岗位页并等待 SPA 渲染完成。
+
+        Returns:
+            (text, blocked)：text 是被拦截/失败时的空串；blocked 是
+            'captcha' / 'login' / ''。blocked 作为返回值而不是实例属性，
+            因为批量抓取是并发的，挂在 self 上会串台。
+        """
+        await page.goto(url, wait_until="domcontentloaded",
+                        timeout=self.config.playwright_timeout)
+        # SPA 详情页靠 XHR 取数：尽量等网络空闲，最多再等 8 秒
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        await asyncio.sleep(settle_seconds)
+        text = await self._extract_page_text(page)
+        blocked = self._is_blocked_page(text)
+        # 正文过短多半是 SPA 没渲染完，滚动触发懒加载后再取一次
+        if not blocked and len(text) < 200:
+            try:
+                await page.mouse.wheel(0, 1500)
+                await asyncio.sleep(1.5)
+                text = await self._extract_page_text(page)
+                blocked = self._is_blocked_page(text)
+            except Exception:
+                pass
+        if blocked == "captcha":
+            self.logger.warning(f"JD 页面被反爬验证拦截: {url}")
+            return "", blocked
+        if blocked == "login":
+            self.logger.warning(f"JD 页面需要登录才能查看: {url}")
+            return "", blocked
+        return text, ""
 
     async def _extract_page_text(self, page) -> str:
-        """把已打开的页面内容整理成 JD 文本"""
-        title = await page.title()
-        page_text = await page.inner_text("body")
-        return self._clean_jd_text(f"{title}\n{page_text}")[:5000]
+        """把已打开的页面内容整理成 JD 文本（优先取 JD 正文块，而不是整页 body）"""
+        try:
+            title = await page.title()
+        except Exception:
+            title = ""
+        block = ""
+        try:
+            block = (await page.evaluate(_JD_BLOCK_JS) or "").strip()
+        except Exception:
+            block = ""
+        if len(block) < 80:
+            try:
+                block = await page.inner_text("body")
+            except Exception:
+                block = ""
+        return self._clean_jd_text(f"{title}\n{block}")[:5000]
 
     async def fetch_jd_texts(
         self,
         urls: List[str],
         concurrency: int = 5,
-        settle_seconds: float = 2.0,
+        settle_seconds: float = 2.5,
     ) -> Dict[str, str]:
         """
-        批量抓取 JD：复用同一个浏览器实例
+        批量抓取 JD：复用同一个浏览器实例 + 真实指纹上下文。
 
-        原实现每个 URL 起一次 chromium，20 个 URL 就是 20 次浏览器启动，
-        极易超时并返回空文本，进而让真实岗位被整批丢弃。
-        失败返回空串（而不是错误提示字符串），交由调用方用职位标题兜底。
+        - SPA 页面等待 networkidle，正文过短自动滚动重试一次；
+        - 被 Cloudflare/登录墙拦截的页面返回空串并记录，由调用方用标题兜底；
+        - 失败返回空串（而不是错误提示字符串），交由调用方用职位标题兜底。
 
         Args:
             urls: 待抓取的职位页 URL
@@ -133,19 +258,48 @@ class JobMatcher:
 
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(
+                    headless=self.config.headless,
+                    args=["--disable-blink-features=AutomationControlled",
+                          "--no-sandbox"],
+                )
                 try:
+                    context = await self._new_stealth_context(browser)
+
                     async def fetch_one(url: str):
                         async with sem:
                             page = None
                             try:
-                                page = await browser.new_page()
-                                await page.goto(
-                                    url, timeout=self.config.playwright_timeout
+                                page = await context.new_page()
+                                text, blocked = await self._render_job_page(
+                                    page, url, settle_seconds
                                 )
-                                await asyncio.sleep(settle_seconds)
-                                text = await self._extract_page_text(page)
-                                self.logger.info(f"成功抓取 JD: {url}")
+                                # 遇登录墙 / 验证码：停下汇报给用户处理，再重试一次
+                                if not text and blocked:
+                                    async with self._block_lock:
+                                        ok = await self.block_handler.handle(
+                                            blocked, url,
+                                            detail="职位详情页需要登录/出现验证，"
+                                                   "请手动处理后继续",
+                                        )
+                                    if ok:
+                                        await asyncio.sleep(1.0)
+                                        try:
+                                            text, blocked = await self._render_job_page(
+                                                page, url, settle_seconds + 2
+                                            )
+                                        except Exception:
+                                            text = ""
+                                # 兜底：加长等待再渲染一次（只在确实没拿到正文时）
+                                if not text and not blocked:
+                                    try:
+                                        text, blocked = await self._render_job_page(
+                                            page, url, settle_seconds + 2
+                                        )
+                                    except Exception:
+                                        text = ""
+                                if text:
+                                    self.logger.info(f"成功抓取 JD: {url}（{len(text)} 字）")
                                 return url, text
                             except Exception as e:
                                 self.logger.warning(f"抓取 JD 失败: {url}, 错误: {e}")
@@ -161,6 +315,7 @@ class JobMatcher:
                         *(fetch_one(u) for u in urls)
                     ):
                         results[url] = text
+                    await context.close()
                 finally:
                     await browser.close()
 
@@ -170,9 +325,14 @@ class JobMatcher:
         return results
 
     def _clean_jd_text(self, text: str) -> str:
-        """清理 JD 文本"""
-        # 移除导航菜单、页脚等干扰内容
-        text = re.sub(r'<[^>]+>', '', text)  # 移除 HTML 标签
+        """
+        清理 JD 文本。
+
+        注意顺序：先按【行】处理再压缩空白。之前是先 `re.sub(r'\\s+',' ')`
+        把整个页面压成一行，再去按行找「职位描述」段落——所有按行的过滤逻辑
+        全部失效，导航噪声也永远清不掉。
+        """
+        text = re.sub(r'<[^>]+>', '', text or "")  # 移除 HTML 标签
 
         # 移除常见的非招聘内容
         skip_patterns = [
@@ -180,29 +340,23 @@ class JobMatcher:
             r'\b招聘官登录\b', r'\b创建账户\b', r'\b忘记密码\b',
             r'\b相关搜索\b', r'\b你可能还想搜索\b'
         ]
-
         for pattern in skip_patterns:
             text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
-        # 清理多余的空白
-        text = re.sub(r'\s+', ' ', text).strip()
+        lines = [re.sub(r'[ \t\u3000]+', ' ', ln).strip() for ln in text.split('\n')]
+        lines = [ln for ln in lines if ln]
 
-        # 截取关键段落
-        paragraphs = text.split('\n')
-        job_description = ""
+        # 命中 JD 关键词时，从第一个关键词所在行开始取，丢掉前面的导航/筛选噪声
+        start = next(
+            (i for i, ln in enumerate(lines)
+             if any(k in ln.lower() for k in _JD_START_KEYS)),
+            None,
+        )
+        if start:
+            lines = lines[start:]
 
-        # 寻找包含职位描述的部分
-        for para in paragraphs:
-            if any(keyword in para.lower() for keyword in [
-                '职位描述', 'job description', 'responsibilities',
-                '任职要求', 'requirements', '我们希望你',
-                'responsibilities', 'qualifications', 'about the role'
-            ]) and len(para) > 50:
-                job_description += para + '\n'
-            elif len(para) > 100:  # 保留较长的段落
-                job_description += para + '\n'
-
-        return job_description.strip()
+        kept = [ln for ln in lines if len(ln) >= 8]
+        return "\n".join(kept or lines).strip()
 
     async def evaluate_match(self, resume: ResumeSchema, jd_text: str) -> MatchResultSchema:
         """
@@ -216,7 +370,7 @@ class JobMatcher:
             MatchResultSchema: 匹配结果
         """
         try:
-            if not jd_text or len(jd_text) < 100:
+            if not jd_text or len(jd_text.strip()) < 20:
                 return MatchResultSchema(
                     score=0,
                     is_match=False,
@@ -231,6 +385,15 @@ class JobMatcher:
 
             # 使用 LLM 进行评估
             result = await self._llm_evaluate(evaluation_prompt)
+            if result is None:
+                return MatchResultSchema(
+                    score=0,
+                    is_match=False,
+                    reasons=["LLM 未返回评估结果（调用失败）"],
+                    missing_skills=[],
+                    matched_skills=[],
+                    match_summary="评估失败：LLM 调用异常，请检查 API Key/网络",
+                )
 
             # 解析结果
             return self._parse_evaluation_result(result, resume)
@@ -300,29 +463,38 @@ class JobMatcher:
         return prompt
 
     async def _llm_evaluate(self, prompt: str) -> str:
-        """使用 LLM 进行评估"""
+        """使用 LLM 进行评估；调用失败返回 None（由调用方给出明确失败原因）"""
         try:
             if not self.config.llm_client:
-                return "{'error': '未配置 OPENAI_API_KEY，无法进行 LLM 匹配评估'}"
+                self.logger.error("未配置 LLM 客户端（OPENAI_API_KEY/base_url），无法评估")
+                return None
             response = await self.config.llm_client.chat.completions.create(
                 model=self.config.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=1000
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            if not content or not str(content).strip():
+                self.logger.error("LLM 返回空内容")
+                return None
+            return content
         except Exception as e:
             self.logger.error(f"LLM 调用失败: {e}")
-            return f"{{'error': '{str(e)}'}}"
+            return None
 
     def _parse_evaluation_result(self, llm_result: str, resume: ResumeSchema) -> MatchResultSchema:
         """解析 LLM 评估结果"""
         try:
             import json
 
+            if not isinstance(llm_result, str):
+                raise ValueError(f"LLM 返回类型异常: {type(llm_result).__name__}")
             # 提取 JSON 部分
             json_start = llm_result.find('{')
             json_end = llm_result.rfind('}') + 1
+            if json_start < 0 or json_end <= json_start:
+                raise ValueError(f"LLM 未返回 JSON: {llm_result[:80]!r}")
             json_str = llm_result[json_start:json_end]
 
             result_data = json.loads(json_str)
@@ -338,6 +510,7 @@ class JobMatcher:
 
         except Exception as e:
             # 如果 JSON 解析失败，返回默认结果
+            self.logger.warning(f"LLM 结果解析失败: {e}")
             return MatchResultSchema(
                 score=0,
                 is_match=False,

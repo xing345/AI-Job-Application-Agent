@@ -245,7 +245,44 @@ def matches_role(text: str, role: str, variants=None, keywords=None) -> bool:
         if len(term) >= 2 and term in t:
             return True
     return any(tok in t for tok in role_match_tokens(role, keywords, variants))
-<<<<<<< HEAD
+
+
+def role_direction_words(role: str, keywords=None, variants=None,
+                         limit: int = 12) -> List[str]:
+    """
+    「能区分岗位方向」的词（干净版，不含二元组碎片）。
+
+    role_match_tokens() 会把「AI应用开发工程师」切成 用开 / 发工 这种
+    跨词边界的二元组 —— 判断标题是否相关时，「个人护理产品创新研发工程师」
+    会因为含「发工」被误判为 AI 方向岗位。这里只保留：
+    职能词根（前端/算法/AI/测试/产品…）、岗位名与变体整串、英文技术栈词。
+    """
+    role = (role or "").strip()
+    words: List[str] = []
+
+    def add(word: str):
+        word = (word or "").strip()
+        if len(word) >= 2 and word.lower() not in [w.lower() for w in words]:
+            words.append(word)
+
+    direction, stack = _split_role(role)
+    low_role = role.lower()
+    for root in ROLE_ROOTS:
+        if root.lower() in low_role:
+            add(root)
+    add(direction)
+    for v in list(variants or [])[:limit]:
+        add(v)
+    for m in _ASCII_TOKEN_RE.findall(role):
+        add(m)
+    add(stack)
+    for kw in list(keywords or [])[:12]:
+        for m in _ASCII_TOKEN_RE.findall(str(kw)):
+            add(m)
+    for v in list(variants or [])[:limit]:
+        for m in _ASCII_TOKEN_RE.findall(v):
+            add(m)
+    return words[:limit]
 
 
 # ====================================================================== #
@@ -425,5 +462,3 @@ def title_direction_relevance(title: str, title_keywords: Optional[Iterable[str]
     strong_hits = sum(1 for kw in kws if kw in t)
     is_occupation = any(w in t for w in TITLE_OCCUPATION_WORDS)
     return strong_hits, is_occupation
-=======
->>>>>>> ed846ec9dd7507a2e3314e4090b41e098a003037

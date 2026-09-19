@@ -1,0 +1,13 @@
+{
+  "_说明": "在这里加你自己的招聘网站。内置 Boss直聘/猎聘/前程无忧 每次必找，不用写在这里；下面 sites 里的站会额外加入。每项：{\"name\": 站点名, \"url\": 职位列表/搜索页地址, \"kind\": 可选 company_site/portal}。加完保存即可，下次 search 自动生效。",
+  "sites": [
+    { "name": "字节跳动校招", "url": "https://jobs.bytedance.com/campus/position?spread=DWA3PQP", "kind": "company_site" },
+    { "name": "哔哩哔哩校招", "url": "https://jobs.bilibili.com/campus/positions?type=3", "kind": "company_site" },
+    { "name": "京东校招", "url": "https://campus.jd.com/home#/jobs?to=present&type=present", "kind": "company_site" },
+    { "name": "腾讯校招", "url": "https://join.qq.com/post.html?query=p_1", "kind": "company_site" },
+    { "name": "赛力斯校招", "url": "https://sokon.zhiye.com/Campus", "kind": "company_site" },
+    { "name": "米哈游校招", "url": "https://jobs.mihoyo.com/#/campus/position?projectIds%5B0%5D=13", "kind": "company_site" },
+    { "name": "中兴校招", "url": "https://app.mokahr.com/campus-recruitment/zte/46903#/jobs?page=1&anchorName=jobsList", "kind": "company_site" },
+    { "name": "星网锐捷校招", "url": "https://www.zhaopin.com/companydetail/jobs-CZ139189880/", "kind": "company_site" }
+  ]
+}

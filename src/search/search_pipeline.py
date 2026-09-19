@@ -21,6 +21,20 @@ from src.models.schemas import ResumeSchema, WorkExperience, Education
 from src.search.job_finder import JobFinder, JobFinderConfig
 from src.search.job_matcher import JobMatcher, JobMatcherConfig, MatchResultSchema
 from src.search.browser_job_finder import BrowserJobFinder
+from src.search.site_registry import resolve_sites
+
+# 日志文件 sink 只挂一次。
+# 每个 SearchPipeline 实例都 logger.add() 的话，日志会按实例数重复写
+# （日志里每条都出现 2~3 次就是这么来的），跑久了还会累积句柄。
+_LOG_SINK_ADDED = False
+
+
+def _ensure_log_sink() -> None:
+    global _LOG_SINK_ADDED
+    if _LOG_SINK_ADDED:
+        return
+    logger.add("search_pipeline.log", rotation="10 MB")
+    _LOG_SINK_ADDED = True
 
 
 @dataclass
@@ -70,33 +84,57 @@ class SearchPipeline:
         interactive: bool = True,
         use_company_sites: bool = True,
         max_companies: int = 5,
-        target_companies: List[str] = None
+        target_companies: List[str] = None,
+        jd_fetch_limit: int = 40,
+        max_final_results: int = 15,
+        use_tavily_search: bool = False,
     ):
+        # 统一的 HITL 阻断处理器：找岗和抓详情共用，登录/验证码时停下等人处理
+        from src.search.hitl import BlockHandler
+        self.block_handler = BlockHandler(interactive=True, headless=headless)
+
         # 初始化组件
         self.job_finder = JobFinder(JobFinderConfig(api_key=tavily_api_key))
-        self.job_matcher = JobMatcher(
-            JobMatcherConfig(openai_api_key=openai_api_key, base_url=base_url, model=model)
+        matcher_config = JobMatcherConfig(
+            openai_api_key=openai_api_key, base_url=base_url,
+            model=model, headless=headless
         )
+        matcher_config.block_handler = self.block_handler
+        self.job_matcher = JobMatcher(matcher_config)
 
         # 真实浏览器职位发现器（方案B：开浏览器遍历招聘站抽取职位链接）
         self.use_browser = use_browser
         # 公司自有招聘官网通道
         self.use_company_sites = use_company_sites and use_browser
+        # 是否启用 Tavily 关键词搜索通道。默认关闭——找岗改为按官网类别+列表遍历，
+        # 不再用关键词搜；仅在确有需要时（无人值守/公司官网都没有）才打开。
+        self.use_tavily_search = use_tavily_search
         self.target_companies = target_companies or None
         self.max_companies = max_companies
         self.jd_concurrency = 5  # JD 抓取并发上限
+        # 进入 JD 抓取/评估阶段的候选上限（原硬编码 20）
+        self.jd_fetch_limit = max(1, int(jd_fetch_limit))
+        # 最终返回岗位的上限（原硬编码 10）
+        self.max_final_results = max(1, int(max_final_results))
         self.browser_finder = (
             BrowserJobFinder(
                 tavily_api_key=tavily_api_key,
                 headless=headless,
                 interactive=interactive,
                 max_companies=max_companies,
+                block_handler=self.block_handler,
             )
             if use_browser else None
         )
 
-        # 配置日志
-        logger.add("search_pipeline.log", rotation="10 MB")
+        # 固定找站点：内置 Boss直聘/猎聘/前程无忧 + 用户自定义 data/job_sites.json
+        self.job_sites = resolve_sites()
+        logger.info(
+            f"固定找站点: {', '.join(s['name'] for s in self.job_sites)}"
+        )
+
+        # 配置日志（全局只挂一次 sink，避免同一条日志被写多遍）
+        _ensure_log_sink()
 
     def set_target_companies(self, companies: List[str] = None) -> None:
         """运行时更新目标公司名单（搜索前用户指定），无需重建整条管道"""
@@ -110,7 +148,7 @@ class SearchPipeline:
         target_info: TargetInstructionSchema,
         resume: ResumeSchema,
         min_score: int = 60,
-        max_results: int = 10
+        max_results: int = None
     ) -> List[SearchResult]:
         """
         运行完整的搜索管道
@@ -141,7 +179,7 @@ class SearchPipeline:
 
         # 第二阶段：抓取 JD
         logger.info("第二阶段：抓取 JD 内容...")
-        fetch_items = job_items[:20]  # 限制抓取数量
+        fetch_items = job_items[: self.jd_fetch_limit]  # 限制进入 JD 阶段的数量（可配置）
         jd_results = await self._batch_fetch_jd(fetch_items)
 
         # 第三阶段：匹配评估
@@ -154,7 +192,10 @@ class SearchPipeline:
 
         # 第四阶段：筛选和排序
         logger.info("第四阶段：筛选和排序结果...")
-        final_results = self._filter_and_sort_results(match_results, min_score, max_results)
+        final_results = self._filter_and_sort_results(
+            match_results, min_score,
+            max_results or self.max_final_results, fetch_items
+        )
 
         end_time = time.time()
         logger.info(
@@ -178,11 +219,12 @@ class SearchPipeline:
 
     async def _discover_job_urls(self, target_info: TargetInstructionSchema) -> List[Dict]:
         """
-        三通道职位发现：通道0 公司自有招聘官网 / 通道2 浏览器招聘门户 / 通道1 Tavily
+        职位发现：固定站点（Boss直聘/猎聘/前程无忧 + 自定义文件）+ 用户显式指定的公司。
+        不再用 Tavily 自动「搜索有哪些招聘网站」。
 
         Returns:
-            [{"url", "title", "company", "channel"}]，保序去重（公司官网优先）。
-            保留标题是为了在后面对 JD 抓取失败时还能用标题兜底评估，而不是直接丢弃岗位。
+            [{"url", "title", "company", "channel"}]，保序去重。
+            保留标题是为了在后面对 JD 抓取失败时还能用标题兜底评估。
         """
         merged: List[Dict] = []
         seen = set()
@@ -196,9 +238,21 @@ class SearchPipeline:
                 item.setdefault("channel", channel)
                 merged.append(item)
 
-        # 通道0：进入公司自有招聘官网找岗
-        if self.use_company_sites and self.browser_finder:
-            logger.info("通道0：进入公司自有招聘官网找岗...")
+        # 固定站点：内置 Boss直聘/猎聘/前程无忧 + data/job_sites.json 里的站
+        if self.use_browser and self.browser_finder:
+            logger.info("固定站点找岗（不再用 Tavily 自动发现网站）...")
+            try:
+                fixed_jobs = await self.browser_finder.discover_fixed_sites(
+                    target_info, self.job_sites
+                )
+                merge(fixed_jobs, "fixed_site")
+                logger.info(f"固定站点通道发现 {len(fixed_jobs)} 个职位链接")
+            except Exception as e:
+                logger.error(f"固定站点通道失败: {e}")
+
+        # 用户显式指定的公司（search 公司名/URL）才进公司官网；直接回车不做自动发现
+        if self.use_company_sites and self.browser_finder and self.target_companies:
+            logger.info(f"进入用户指定的 {len(self.target_companies)} 家公司招聘官网...")
             try:
                 company_jobs = await self.browser_finder.discover_company_careers(
                     target_info, known_companies=self.target_companies
@@ -206,24 +260,20 @@ class SearchPipeline:
                 merge(company_jobs, "company_site")
                 logger.info(f"公司官网通道发现 {len(company_jobs)} 个职位链接")
             except Exception as e:
-                logger.error(f"公司官网通道失败，继续后续通道: {e}")
+                logger.error(f"公司官网通道失败: {e}")
 
-        # 通道2：真实浏览器遍历招聘站
-        if self.use_browser and self.browser_finder:
-            logger.info("通道2：真实浏览器遍历招聘站找岗...")
-            try:
-                browser_jobs = await self.browser_finder.discover(target_info)
-                merge(browser_jobs, "job_portal")
-                logger.info(f"浏览器通道发现 {len(browser_jobs)} 个职位链接")
-            except Exception as e:
-                logger.error(f"浏览器找岗失败，回退到 Tavily 通道: {e}")
+        # 排序后再分配 JD 抓取名额：接口自带 JD 正文 / 标题高相关 / 公司官网优先
+        channel_base = {"company_site": 5, "fixed_site": 3, "job_portal": 2, "tavily": 1}
 
-        # 通道1：Tavily 搜索
-        logger.info("通道1：Tavily 搜索招聘页面...")
-        tavily_urls = await self.job_finder.find_job_portals(target_info)
-        merge([{"url": u, "title": "", "company": ""} for u in tavily_urls], "tavily")
-        logger.info(f"Tavily 通道发现 {len(tavily_urls)} 个招聘页面")
+        def rank_key(it):
+            score = it.get("title_score")
+            if not isinstance(score, (int, float)):
+                score = channel_base.get(it.get("channel"), 0)
+            has_jd = 1 if (it.get("description") or "").strip() else 0
+            return (has_jd, score, channel_base.get(it.get("channel"), 0))
 
+        merged.sort(key=rank_key, reverse=True)
+        logger.info(f"候选岗位已按标题相关度排序，共 {len(merged)} 个进入下一阶段")
         return merged
 
     async def _batch_fetch_jd(self, items: List[Dict]) -> Dict[str, str]:
@@ -236,18 +286,47 @@ class SearchPipeline:
         urls = [it["url"] for it in items if it.get("url")]
         if not urls:
             return {}
-        return await self.job_matcher.fetch_jd_texts(
-            urls, concurrency=self.jd_concurrency
+
+        # 1) 发现阶段的列表 XHR 已带回完整 JD（>=80 字）时直接复用，零请求成本
+        jd_results: Dict[str, str] = {}
+        for it in items:
+            desc = (it.get("description") or "").strip()
+            if len(desc) >= 80:
+                jd_results[it["url"]] = desc
+        prefetched = len(jd_results)
+
+        # 2) 其余岗位才开浏览器渲染详情页
+        todo = [u for u in urls if u not in jd_results]
+        fetched_ok = 0
+        if todo:
+            fetched = await self.job_matcher.fetch_jd_texts(
+                todo, concurrency=self.jd_concurrency
+            )
+            fetched_ok = sum(1 for v in fetched.values() if v)
+            jd_results.update(fetched)
+
+        logger.info(
+            f"JD 准备完成：接口预取 {prefetched} 个，浏览器抓取 {fetched_ok}/{len(todo)} 个"
         )
+        return jd_results
 
     @staticmethod
     def _weak_jd(title: str, url: str) -> str:
-        """JD 抓取失败时的兜底文本：至少让真实岗位带着标题进入评估"""
+        """
+        JD 抓取失败时的兜底文本：至少让真实岗位带着标题进入评估。
+
+        之前这段只有 60 来字，短标题 + 短 URL 时会掉到 evaluate_match 的
+        100 字门槛以下 → 直接判 0 分。这里把话说明白，并要求 LLM
+        只依据岗位名称判断方向相关性，不要因为看不到技能细节就给 0 分。
+        """
         if not title:
             return ""
         return (
-            f"职位名称: {title}\n来源链接: {url}\n"
-            "（未能抓取到职位正文，仅依据标题判断岗位相关性）"
+            f"职位名称: {title}\n"
+            f"来源链接: {url}\n"
+            "说明: 本轮只抓到职位名称与来源链接，未能抓取到职位正文。\n"
+            "评估要求: 请仅依据职位名称判断该岗位与求职者的目标方向/技能是否相关；"
+            "技能细节未知时不要臆断为不匹配，分数应体现「方向是否对得上」。"
         )
 
     async def _batch_evaluate_match(
@@ -294,7 +373,8 @@ class SearchPipeline:
         self,
         match_results: Dict[str, MatchResultSchema],
         min_score: int,
-        max_results: int
+        max_results: int,
+        items: List[Dict] = None,
     ) -> List[SearchResult]:
         """
         筛选和排序结果
@@ -303,12 +383,19 @@ class SearchPipeline:
         above_threshold=False —— 用户需要看到「最接近的几个岗位 + 实际分数」，
         而不是一个空列表（空列表无法区分「没抓到」和「抓到了但都不合适」）。
         """
+        # 发现阶段的真实职位标题（不能被 match_summary 覆盖，否则报告里看不到岗位名）
+        title_by_url = {
+            it.get("url"): (it.get("title") or "").strip()
+            for it in (items or []) if it.get("url")
+        }
+
         # 转换为 SearchResult 对象
         search_results = []
         for url, match_result in match_results.items():
+            real_title = title_by_url.get(url, "")
             search_result = SearchResult(
                 url=url,
-                title=f"职位申请 - {match_result.match_summary}",
+                title=real_title or f"职位申请 - {match_result.match_summary}",
                 match_result=match_result,
                 matched_at=time.time(),
                 above_threshold=match_result.score >= min_score,
@@ -356,6 +443,7 @@ class SearchPipeline:
             report += "\n⚠️ 本轮没有岗位达到最低分门槛，以下为最接近的岗位（未达门槛）\n"
 
         for i, result in enumerate(results, 1):
+            missing = ", ".join(result.match_result.missing_skills[:8]) or "无明显差距"
             report += f"""
 {i}. {result.title}
    URL: {result.url}
@@ -364,12 +452,9 @@ class SearchPipeline:
    是否匹配: {"是" if result.is_qualified else "否"}
    匹配原因: {", ".join(result.match_result.reasons[:3])}
    已匹配技能: {", ".join(result.match_result.matched_skills[:5])}
+   欠缺技能: {missing}
 """
 
-        if results and len(results[0].match_result.missing_skills) > 0:
-            report += f"""
-建议补充的技能: {", ".join(results[0].match_result.missing_skills[:10])}
-"""
 
         return report
 

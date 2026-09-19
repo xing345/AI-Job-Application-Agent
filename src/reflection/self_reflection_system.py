@@ -89,6 +89,33 @@ class SelfReflectionSystem:
         )
         ''')
 
+        # 老版本数据库迁移：表已存在时 CREATE TABLE IF NOT EXISTS 不会补列，
+        # 逐列检查，缺失则 ALTER TABLE 补齐（如旧库缺 strategy_rules.category）
+        expected_columns = {
+            "job_applications": [
+                ("error_message", "TEXT"), ("search_source", "TEXT"),
+                ("original_jd", "TEXT"), ("user_persona_snapshot", "TEXT"),
+            ],
+            "reflections": [
+                ("application_id", "INTEGER"), ("failure_reason_category", "TEXT"),
+                ("root_cause_analysis", "TEXT"), ("actionable_advice", "TEXT"),
+                ("should_update_persona", "BOOLEAN"),
+            ],
+            "strategy_rules": [
+                ("rule_type", "TEXT"), ("rule_content", "TEXT"),
+                ("confidence_score", "REAL DEFAULT 1.0"),
+                ("is_active", "BOOLEAN DEFAULT 1"), ("last_used", "TIMESTAMP"),
+                ("category", "TEXT"), ("examples_count", "INTEGER DEFAULT 0"),
+            ],
+        }
+        for tbl, cols in expected_columns.items():
+            cursor.execute(f"PRAGMA table_info({tbl})")
+            existing = {row[1] for row in cursor.fetchall()}
+            for col_name, col_type in cols:
+                if col_name not in existing:
+                    cursor.execute(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_type}")
+                    logger.info(f"数据库迁移：{tbl} 补充列 {col_name}")
+
         conn.commit()
         conn.close()
 

@@ -54,7 +54,9 @@ def test_bilibili_campus_detail_url_template():
         "https://jobs.bilibili.com/campus/positions?type=3",
         {"id": "30401", "title": "音视频理解工程师"},
     )
-    assert url == "https://jobs.bilibili.com/campus/positions/30401/detail"
+    # 实测（tools/verify_detail_urls.py）：B 站详情页是 /campus/positions/{id}，
+    # 多写 /detail 会被重定向回首页 → JD 抓取必然失败
+    assert url == "https://jobs.bilibili.com/campus/positions/30401"
 
 
 def test_listing_url_guard_keeps_direct_list_page():
