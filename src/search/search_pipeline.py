@@ -88,16 +88,33 @@ class SearchPipeline:
         jd_fetch_limit: int = 40,
         max_final_results: int = 15,
         use_tavily_search: bool = False,
+        max_jobs_per_site: int = 25,
+        max_list_pages: int = 4,
+        max_card_clicks: int = 16,
+        max_api_objects: int = 200,
+        jd_concurrency: int = 3,
+        portal_keyword_search: bool = True,
+        nav_advisor_config: dict = None,
+        llm_config: dict = None,
+        browser_config: dict = None,
     ):
         # 统一的 HITL 阻断处理器：找岗和抓详情共用，登录/验证码时停下等人处理
         from src.search.hitl import BlockHandler
         self.block_handler = BlockHandler(interactive=True, headless=headless)
 
+        # 浏览器登录态目录：找岗与抓 JD 共用同一个目录，
+        # 用户手动登录一次即可跨阶段/跨轮复用（详见 BrowserJobFinder._start_browser）
+        browser_config = browser_config or {}
+        user_data_dir = browser_config.get("user_data_dir") or None
+        persist_login = bool(browser_config.get("persist_login", True))
+
         # 初始化组件
         self.job_finder = JobFinder(JobFinderConfig(api_key=tavily_api_key))
         matcher_config = JobMatcherConfig(
             openai_api_key=openai_api_key, base_url=base_url,
-            model=model, headless=headless
+            model=model, headless=headless,
+            user_data_dir=user_data_dir, persist_login=persist_login,
+            visible_concurrency=int(browser_config.get("visible_concurrency", 2)),
         )
         matcher_config.block_handler = self.block_handler
         self.job_matcher = JobMatcher(matcher_config)
@@ -108,14 +125,23 @@ class SearchPipeline:
         self.use_company_sites = use_company_sites and use_browser
         # 是否启用 Tavily 关键词搜索通道。默认关闭——找岗改为按官网类别+列表遍历，
         # 不再用关键词搜；仅在确有需要时（无人值守/公司官网都没有）才打开。
+        # 注意：这个开关目前只是记录意向，搜索管道未接线（见 FIX 报告"已知遗留"）。
         self.use_tavily_search = use_tavily_search
         self.target_companies = target_companies or None
         self.max_companies = max_companies
-        self.jd_concurrency = 5  # JD 抓取并发上限
         # 进入 JD 抓取/评估阶段的候选上限（原硬编码 20）
         self.jd_fetch_limit = max(1, int(jd_fetch_limit))
         # 最终返回岗位的上限（原硬编码 10）
         self.max_final_results = max(1, int(max_final_results))
+        # JD 抓取并发（可见浏览器下 JobMatcher 会再收敛到 visible_concurrency）
+        self.jd_concurrency = max(1, int(jd_concurrency))
+
+        # 受约束的 LLM 导航裁决器（config.search.nav_advisor）：
+        # 只在规则判不准时于候选里选一个 / 否决跳转，失败即回退确定性规则
+        self.nav_advisor = BrowserJobFinder.build_nav_advisor(
+            nav_advisor_config or {}, llm_config or {}
+        )
+
         self.browser_finder = (
             BrowserJobFinder(
                 tavily_api_key=tavily_api_key,
@@ -123,9 +149,18 @@ class SearchPipeline:
                 interactive=interactive,
                 max_companies=max_companies,
                 block_handler=self.block_handler,
+                max_jobs_per_site=max_jobs_per_site,
+                max_list_pages=max_list_pages,
+                max_card_clicks=max_card_clicks,
+                max_api_objects=max_api_objects,
+                portal_keyword_search=portal_keyword_search,
+                user_data_dir=user_data_dir,
+                persist_login=persist_login,
+                nav_advisor=self.nav_advisor,
             )
             if use_browser else None
         )
+
 
         # 固定找站点：内置 Boss直聘/猎聘/前程无忧 + 用户自定义 data/job_sites.json
         self.job_sites = resolve_sites()
@@ -164,6 +199,10 @@ class SearchPipeline:
         """
         start_time = time.time()
         logger.info(f"开始搜索管道: {target_info.company} - {target_info.role}")
+
+        # 每轮搜索重置 LLM 导航裁决预算（避免一个长会话把预算耗在某一轮里）
+        if self.nav_advisor is not None:
+            self.nav_advisor.reset()
 
         # 第一阶段：搜索职位
         logger.info("第一阶段：搜索职位...")

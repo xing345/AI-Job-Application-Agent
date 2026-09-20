@@ -67,14 +67,18 @@ class MatchResultSchema(BaseModel):
 class JobMatcherConfig:
     """匹配器配置"""
     def __init__(self, openai_api_key: str = None, base_url: str = None, model: str = None,
-                 headless: bool = True):
-        # 未显式传入时从 config.json 的 llm 段读取（环境变量兜底）
+                 headless: bool = True, user_data_dir: str = None,
+                 persist_login: bool = None, visible_concurrency: int = 2):
+        # 未显式传入时从 config.json 的 llm / browser 段读取（环境变量兜底）
         llm_cfg = {}
+        browser_cfg = {}
         try:
             config_path = os.path.join(project_root, "config.json")
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
-                    llm_cfg = json.load(f).get("llm", {}) or {}
+                    _cfg = json.load(f)
+                llm_cfg = _cfg.get("llm", {}) or {}
+                browser_cfg = _cfg.get("browser", {}) or {}
         except Exception:
             pass
 
@@ -97,8 +101,20 @@ class JobMatcherConfig:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
+        # 登录态复用：与职位发现阶段共用同一个用户目录，
+        # 用户在可见窗口里登录一次 Boss/猎聘，抓 JD 时不必再登录一遍
+        self.persist_login = bool(
+            browser_cfg.get("persist_login", True) if persist_login is None else persist_login
+        )
+        self.user_data_dir = user_data_dir or browser_cfg.get("user_data_dir") or None
+        # 相对路径按项目根解析，保证与 BrowserJobFinder 用同一个目录（相对 cwd 会漂移）
+        if self.user_data_dir and not os.path.isabs(self.user_data_dir):
+            self.user_data_dir = os.path.join(project_root, self.user_data_dir)
+        # 可见浏览器下并发开页上限：5 个标签页轮流抢焦点 = 用户看到的「页面疯狂闪烁」
+        self.visible_concurrency = max(1, int(visible_concurrency))
         # HITL：详情页需要登录 / 验证码时停下汇报给用户处理（None 则按 headless 自建）
         self.block_handler = None
+
 
 
 class JobMatcher:
@@ -128,40 +144,80 @@ class JobMatcher:
         """
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=self.config.headless)
+                context, browser = await self._launch_browser(p)
                 try:
-                    context = await self._new_stealth_context(browser)
-                    page = await context.new_page()
-                    text, blocked = await self._render_job_page(page, url, 2.0)
-                    if blocked:
-                        self.logger.warning(f"JD 页面被拦截（{blocked}）: {url}")
-                    elif text:
-                        self.logger.info(f"成功抓取 JD: {url}（{len(text)} 字）")
-                    return text
+                    page = None
+                    try:
+                        page = await context.new_page()
+                        text, blocked = await self._render_job_page(page, url, 2.0)
+                        if blocked:
+                            self.logger.warning(f"JD 页面被拦截（{blocked}）: {url}")
+                        elif text:
+                            self.logger.info(f"成功抓取 JD: {url}（{len(text)} 字）")
+                        return text
+                    finally:
+                        if page:
+                            try:
+                                await page.close()
+                            except Exception:
+                                pass
                 finally:
-                    await browser.close()
+                    await context.close()
+                    if browser is not None:
+                        await browser.close()
 
         except Exception as e:
             self.logger.error(f"抓取 JD 失败: {url}, 错误: {e}")
             return ""
 
     # 反爬验证页 / 登录墙 / 非岗位页特征；命中说明拿到的不是 JD 正文
+    # 「强」特征：命中即可判定被挡
     _BLOCK_HINTS = (
         "cloudflare", "cf-browser-verification", "checking your browser", "人机验证",
-        "安全验证", "安全检查", "滑块", "拖动滑块", "验证码", "行为验证",
+        "拖动滑块", "行为验证", "请完成安全验证",
         "访问被拒绝", "access denied", "enable javascript and cookies",
-        "请完成安全验证", "网络不给力，请稍后重试",
+        "网络不给力，请稍后重试",
+    )
+    # 「弱」特征：这些词在正常 JD 正文里也会出现（例如「验证码风控系统开发工程师」），
+    # 必须配合 DOM 上真的有验证控件才判定为拦截页
+    _WEAK_BLOCK_HINTS = ("验证码", "安全验证", "安全检查", "滑块")
+    # 验证控件的 DOM 特征（只数元素，不点击）
+    _BLOCK_CONTROL_SELECTOR = (
+        "input[placeholder*='验证码'], input[name*='captcha' i], input[id*='captcha' i], "
+        "iframe[src*='captcha' i], [class*='captcha' i], [class*='slider' i]"
     )
     _LOGINWALL_HINTS = ("用户登录", "请登录", "账号密码登录", "扫码登录", "sign in to continue")
 
-    def _is_blocked_page(self, text: str) -> str:
-        """识别拦截页：返回 'captcha' / 'login' / ''（正常页）"""
+    async def _has_block_control(self, page) -> bool:
+        """页面上是否真的存在验证控件/密码输入框（DOM 证据，失败按没有算）"""
+        if page is None:
+            return False
+        try:
+            n = await page.eval_on_selector_all(
+                f"{self._BLOCK_CONTROL_SELECTOR}, input[type='password']",
+                "els => els.length",
+            )
+            return bool(int(n or 0))
+        except Exception:
+            return False
+
+    async def _is_blocked_page(self, text: str, page=None) -> str:
+        """
+        识别拦截页：返回 'captcha' / 'login' / ''（正常页）。
+
+        给了 page 时会用 DOM 证据复核弱特征：JD 正文里出现「验证码」三个字
+        不该把这一页判成验证墙（否则那条 JD 直接丢掉，只能拿标题兜底打分）。
+        """
         low = (text or "").lower()
         if any(h in low for h in self._BLOCK_HINTS):
             return "captcha"
-        # 登录墙：正文极短且以登录提示为主
+        if any(h in low for h in self._WEAK_BLOCK_HINTS):
+            if page is None or await self._has_block_control(page):
+                return "captcha"
+        # 登录墙：正文极短且以登录提示为主（有 page 时再要求存在密码框/验证控件）
         if len(low) < 800 and any(h in low for h in self._LOGINWALL_HINTS):
-            return "login"
+            if page is None or await self._has_block_control(page):
+                return "login"
         return ""
 
     async def _new_stealth_context(self, browser):
@@ -177,6 +233,56 @@ class JobMatcher:
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
         return context
+
+    async def _launch_browser(self, p) -> tuple:
+        """
+        启动抓 JD 用的浏览器，优先复用与「职位发现」同一个用户目录。
+
+        Returns:
+            (context, browser_or_None)
+            - 持久化启动成功：browser 可能是 None（Playwright 对 persistent context
+              的 `context.browser` 返回 None），关闭时只需关 context；
+            - 回退匿名上下文：正常返回 (context, browser)。
+
+        为什么必须复用目录：搜索链路原来是「发现用浏览器 A（用户在里面登录了
+        Boss）→ A 关闭 → 抓 JD 用浏览器 B（全新会话）」——用户在 A 里的登录等于
+        白做，B 又弹一次登录墙，于是用户被迫反复登录、窗口反复闪。共用同一个
+        用户目录后登录态落盘，跨阶段、跨轮次都还在。
+        """
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        if self.config.persist_login and self.config.user_data_dir:
+            try:
+                os.makedirs(self.config.user_data_dir, exist_ok=True)
+                ctx = await p.chromium.launch_persistent_context(
+                    self.config.user_data_dir,
+                    headless=self.config.headless,
+                    user_agent=self.user_agent,
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                    viewport={"width": 1920, "height": 1080},
+                    args=args,
+                )
+                await ctx.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                )
+                self.logger.info(
+                    f"JD 抓取浏览器已启动（复用登录态目录 {self.config.user_data_dir}）"
+                )
+                # 新浏览器实例 = 新会话：清掉「该站已人工处理过」的记录，
+                # 否则登录墙会被当成「已通行」静默放行，JD 抓空却没人提醒
+                try:
+                    self.block_handler.reset()
+                except Exception:
+                    pass
+                return ctx, None
+            except Exception as e:
+                self.logger.warning(f"持久化浏览器目录不可用（{e}），回退匿名上下文")
+        browser = await p.chromium.launch(headless=self.config.headless, args=args)
+        try:
+            self.block_handler.reset()
+        except Exception:
+            pass
+        return await self._new_stealth_context(browser), browser
 
     async def _render_job_page(self, page, url: str, settle_seconds: float) -> tuple:
         """
@@ -196,14 +302,14 @@ class JobMatcher:
             pass
         await asyncio.sleep(settle_seconds)
         text = await self._extract_page_text(page)
-        blocked = self._is_blocked_page(text)
+        blocked = await self._is_blocked_page(text, page)
         # 正文过短多半是 SPA 没渲染完，滚动触发懒加载后再取一次
         if not blocked and len(text) < 200:
             try:
                 await page.mouse.wheel(0, 1500)
                 await asyncio.sleep(1.5)
                 text = await self._extract_page_text(page)
-                blocked = self._is_blocked_page(text)
+                blocked = await self._is_blocked_page(text, page)
             except Exception:
                 pass
         if blocked == "captcha":
@@ -243,7 +349,12 @@ class JobMatcher:
 
         - SPA 页面等待 networkidle，正文过短自动滚动重试一次；
         - 被 Cloudflare/登录墙拦截的页面返回空串并记录，由调用方用标题兜底；
-        - 失败返回空串（而不是错误提示字符串），交由调用方用职位标题兜底。
+        - 失败返回空串（而不是错误提示字符串），交由调用方用职位标题兜底；
+        - 可见浏览器下并发被压到 visible_concurrency：原来固定 5 个标签页同时
+          开着，窗口会不停切焦点/重载，用户手动登录时看到的就是「网页疯狂闪烁」；
+        - HITL 暂停期间所有页面先 `wait_until_resumed()` 停住，并且暂停结束后
+          优先复用用户刚登录好的那个页面，不再无条件 goto 重载（重载会把
+          用户正在进行的登录打断，也会让页面继续闪）。
 
         Args:
             urls: 待抓取的职位页 URL
@@ -254,22 +365,26 @@ class JobMatcher:
         if not urls:
             return results
 
-        sem = asyncio.Semaphore(max(1, concurrency))
+        eff_concurrency = max(1, int(concurrency))
+        if not self.config.headless:
+            eff_concurrency = max(1, min(eff_concurrency, self.config.visible_concurrency))
+        sem = asyncio.Semaphore(eff_concurrency)
+        self.logger.info(
+            f"开始抓取 {len(urls)} 个 JD（并发 {eff_concurrency}"
+            f"{'，可见浏览器已自动收敛并发以避免页面闪烁' if not self.config.headless else ''}）"
+        )
 
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(
-                    headless=self.config.headless,
-                    args=["--disable-blink-features=AutomationControlled",
-                          "--no-sandbox"],
-                )
+                context, browser = await self._launch_browser(p)
                 try:
-                    context = await self._new_stealth_context(browser)
 
                     async def fetch_one(url: str):
                         async with sem:
                             page = None
                             try:
+                                # 有人在浏览器里手动处理登录/验证时，先别开新页
+                                await self.block_handler.wait_until_resumed()
                                 page = await context.new_page()
                                 text, blocked = await self._render_job_page(
                                     page, url, settle_seconds
@@ -283,13 +398,18 @@ class JobMatcher:
                                                    "请手动处理后继续",
                                         )
                                     if ok:
-                                        await asyncio.sleep(1.0)
-                                        try:
-                                            text, blocked = await self._render_job_page(
-                                                page, url, settle_seconds + 2
-                                            )
-                                        except Exception:
-                                            text = ""
+                                        await self.block_handler.wait_until_resumed()
+                                        # 用户可能已经在同一个标签页里登录并跳转，
+                                        # 先就地取一次内容；只有这里确实还是拦截页
+                                        # 才重新渲染（避免无条件 goto 造成重载风暴）
+                                        text, blocked = await self._reuse_page_text(page)
+                                        if not text:
+                                            try:
+                                                text, blocked = await self._render_job_page(
+                                                    page, url, settle_seconds + 2
+                                                )
+                                            except Exception:
+                                                text = ""
                                 # 兜底：加长等待再渲染一次（只在确实没拿到正文时）
                                 if not text and not blocked:
                                     try:
@@ -315,14 +435,31 @@ class JobMatcher:
                         *(fetch_one(u) for u in urls)
                     ):
                         results[url] = text
-                    await context.close()
                 finally:
-                    await browser.close()
+                    await context.close()
+                    if browser is not None:
+                        await browser.close()
 
         except Exception as e:
             self.logger.error(f"批量抓取 JD 失败: {e}")
 
         return results
+
+    async def _reuse_page_text(self, page) -> tuple:
+        """
+        就地读取「用户刚处理过」的那个页面：拿到正文就直接用，不再 goto 重载。
+
+        返回 (text, blocked)，语义与 _render_job_page 一致。
+        """
+        try:
+            await self.block_handler.wait_until_resumed()
+            text = await self._extract_page_text(page)
+            blocked = await self._is_blocked_page(text, page)
+            if text and not blocked and len(text) >= 200:
+                return text, ""
+            return "", blocked
+        except Exception:
+            return "", ""
 
     def _clean_jd_text(self, text: str) -> str:
         """

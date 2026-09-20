@@ -96,9 +96,25 @@ class AgentOrchestrator:
                 'max_results_per_search': 50,
                 'use_browser': True,
                 'use_company_sites': True,
+                'use_tavily_search': False,
+                'recruit_type': 'campus',
                 'max_companies': 5,
                 'target_companies': [],
-                'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job']
+                'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job'],
+                # 找岗/抓 JD 的成本上限（详见 config.json 注释与 SEARCH_FIX_REPORT.md）
+                'jd_fetch_limit': 40,
+                'max_jobs_per_site': 25,
+                'max_list_pages': 4,
+                'max_card_clicks': 16,
+                'max_api_objects': 200,
+                'jd_concurrency': 3,
+                'portal_keyword_search': True,
+                'nav_advisor': {
+                    'enabled': True,
+                    'max_calls_per_search': 4,
+                    'timeout_s': 25,
+                    'max_candidates': 6,
+                },
             },
             'matching': {
                 'threshold_score': 70,
@@ -108,8 +124,12 @@ class AgentOrchestrator:
             'browser': {
                 'headless': True,
                 'timeout': 30000,
-                'max_retries': 3
+                'max_retries': 3,
+                'persist_login': True,
+                'user_data_dir': 'data/browser_profile',
+                'visible_concurrency': 2,
             },
+
             'reflection': {
                 'enabled': True,
                 'learning_mode': 'active'
@@ -1292,9 +1312,24 @@ DEFAULT_AGENT_CONFIG = {
         'max_results_per_search': 50,
         'use_browser': True,
         'use_company_sites': True,
+        'use_tavily_search': False,
+        'recruit_type': 'campus',
         'max_companies': 5,
         'target_companies': [],
-        'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job']
+        'sources': ['bosszhipin', 'lagou', 'liepin', 'zhaopin', '51job'],
+        'jd_fetch_limit': 40,
+        'max_jobs_per_site': 25,
+        'max_list_pages': 4,
+        'max_card_clicks': 16,
+        'max_api_objects': 200,
+        'jd_concurrency': 3,
+        'portal_keyword_search': True,
+        'nav_advisor': {
+            'enabled': True,
+            'max_calls_per_search': 4,
+            'timeout_s': 25,
+            'max_candidates': 6,
+        },
     },
     'matching': {
         'threshold_score': 70,
@@ -1304,7 +1339,10 @@ DEFAULT_AGENT_CONFIG = {
     'browser': {
         'headless': True,
         'timeout': 30000,
-        'max_retries': 3
+        'max_retries': 3,
+        'persist_login': True,
+        'user_data_dir': 'data/browser_profile',
+        'visible_concurrency': 2,
     },
     'reflection': {
         'enabled': True,

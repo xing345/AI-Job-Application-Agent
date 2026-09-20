@@ -5,6 +5,8 @@
     "max_results_per_search": 50,
     "use_browser": true,
     "use_company_sites": true,
+    "use_tavily_search": false,
+    "recruit_type": "campus",
     "max_companies": 5,
     "target_companies": [],
     "sources": [
@@ -13,7 +15,20 @@
       "liepin",
       "zhaopin",
       "51job"
-    ]
+    ],
+    "jd_fetch_limit": 40,
+    "max_jobs_per_site": 25,
+    "max_list_pages": 4,
+    "max_card_clicks": 16,
+    "max_api_objects": 200,
+    "jd_concurrency": 3,
+    "portal_keyword_search": true,
+    "nav_advisor": {
+      "enabled": true,
+      "max_calls_per_search": 4,
+      "timeout_s": 25,
+      "max_candidates": 6
+    }
   },
   "matching": {
     "threshold_score": 70,
@@ -23,7 +38,10 @@
   "browser": {
     "headless": true,
     "timeout": 30000,
-    "max_retries": 3
+    "max_retries": 3,
+    "persist_login": true,
+    "user_data_dir": "data/browser_profile",
+    "visible_concurrency": 2
   },
   "reflection": {
     "enabled": true,

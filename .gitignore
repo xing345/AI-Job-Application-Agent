@@ -111,6 +111,10 @@ downloads/
 # Browser cache
 *.cache
 
+# 浏览器登录态目录（含 cookie/session，绝不能入库）
+data/browser_profile/
+data/browser_profile_*/
+
 # Agent specific
 agent_state.db
 user_persona.json

@@ -49,6 +49,7 @@ class JobSearcher:
 
         search_cfg = config.get("search") or {}
         browser_cfg = config.get("browser") or {}
+        llm_cfg = config.get("llm") or {}
         use_browser = bool(search_cfg.get("use_browser", True))
         use_company_sites = bool(search_cfg.get("use_company_sites", True))
         max_companies = int(search_cfg.get("max_companies", 5))
@@ -61,6 +62,15 @@ class JobSearcher:
         use_tavily_search = bool(search_cfg.get("use_tavily_search", False))
         # 招聘类型：默认只找校招（campus），可在 config.search.recruit_type 改为 social/all
         self.recruit_type = (search_cfg.get("recruit_type") or "campus").strip().lower()
+
+        # 找岗/抓 JD 的成本上限（全部可配置，避免「为多抓岗位而无上限地抓」）
+        max_jobs_per_site = int(search_cfg.get("max_jobs_per_site", 25))
+        max_list_pages = int(search_cfg.get("max_list_pages", 4))
+        max_card_clicks = int(search_cfg.get("max_card_clicks", 16))
+        max_api_objects = int(search_cfg.get("max_api_objects", 200))
+        jd_concurrency = int(search_cfg.get("jd_concurrency", 3))
+        # 聚合门户是否改用站内搜索 URL（Boss/猎聘/前程无忧；公司官网不受影响）
+        portal_keyword_search = bool(search_cfg.get("portal_keyword_search", True))
 
         self.pipeline = SearchPipeline(
             self.tavily_api_key,
@@ -76,7 +86,23 @@ class JobSearcher:
             jd_fetch_limit=jd_fetch_limit,
             max_final_results=max_final_results,
             use_tavily_search=use_tavily_search,
+            max_jobs_per_site=max_jobs_per_site,
+            max_list_pages=max_list_pages,
+            max_card_clicks=max_card_clicks,
+            max_api_objects=max_api_objects,
+            jd_concurrency=jd_concurrency,
+            portal_keyword_search=portal_keyword_search,
+            nav_advisor_config=search_cfg.get("nav_advisor") or {},
+            llm_config=llm_cfg,
+            browser_config=browser_cfg,
         )
+        logger.info(
+            f"找岗成本上限: 每站最多 {max_jobs_per_site} 个岗位/翻 {max_list_pages} 页/"
+            f"点 {max_card_clicks} 张卡片/认 {max_api_objects} 条接口职位，"
+            f"JD 抓取 {jd_fetch_limit} 个（并发 {jd_concurrency}），"
+            f"最终返回 {max_final_results} 个"
+        )
+
 
     def set_target_companies(self, companies: List[str] = None) -> None:
         """运行时更新目标公司名单（搜索前由 Agent 询问用户后调用）"""

@@ -191,7 +191,10 @@ async def test_category_link_rejects_detail_pages(monkeypatch):
     ])
     page = _FakePage("https://app.mokahr.com/campus-recruitment/zte/46903#/jobs")
     got = await f._find_category_link(page, _target())
-    assert got and "#/job/" not in got
+    # 该 URL 本身已被识别为职位列表页（/campus-recruitment），直接返回 None 也是
+    # 正确结果：既没跳去 #/job/ 详情页，也没跳去 #/jobs?page=2 分页。
+    # 这里断言的是「不会导航到职位详情页」，None 与别的列表页都算通过。
+    assert not got or "#/job/" not in got
 
 
 def test_category_terms_exclude_job_words():

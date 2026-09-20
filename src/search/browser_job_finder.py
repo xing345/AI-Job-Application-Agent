@@ -21,7 +21,7 @@ import re
 import sys
 import os
 from typing import Dict, List, Optional
-from urllib.parse import urlparse, urljoin, parse_qsl, urlencode
+from urllib.parse import urlparse, urljoin, parse_qsl, urlencode, quote
 
 from loguru import logger
 from tavily import TavilyClient
@@ -37,6 +37,7 @@ from src.search.query_expander import (
     role_direction_words,
 )
 from src.search.hitl import BlockHandler
+from src.search.nav_advisor import NavAdvisor, NavAdvisorConfig
 
 # 招聘/职位详情页的 URL 特征（国内招聘平台 + 公司自有招聘站）
 JOB_URL_HINTS = [
@@ -60,6 +61,49 @@ CAPTCHA_HINTS = [
     "行为验证", "captcha", "are you a robot", "security check",
     "verify you are human", "access denied", "unusual traffic",
 ]
+
+# 「强」验证墙特征：命中即可判定被挡，不需要再看 DOM 控件。
+# 其余弱特征（"验证码"三个字）必须配合「页面里真的有验证控件」才判定——
+# 否则 Boss / 智联这类正常页面里的「短信验证码登录」入口会把好页面判成验证墙。
+STRONG_CAPTCHA_HINTS = [
+    "请完成安全验证", "滑动验证", "拖动滑块", "行为验证", "人机验证",
+    "访问验证", "安全验证失败", "网络不给力，请稍后重试",
+    "captcha", "are you a robot", "unusual traffic", "access denied",
+    "verify you are human", "security check",
+]
+
+# 浏览器内执行：探测「这道墙是不是真的」的 DOM 证据（只看存在的控件，不看文案）
+_BLOCK_PROBE_SELECTORS = {
+    "password_inputs": "input[type='password']",
+    "captcha_inputs": ("input[placeholder*='验证码'], input[name*='captcha' i], "
+                       "input[id*='captcha' i], input[maxlength='4'][autocomplete='off']"),
+    "captcha_boxes": ("[class*='captcha' i], [id*='captcha' i], [class*='slider' i], "
+                      "[class*='verify' i], iframe[src*='captcha' i]"),
+    "login_forms": "form[action*='login' i], form[class*='login' i], [class*='login-modal' i]",
+}
+
+# 聚合门户的「站内搜索页」URL 模板。
+# 这里是本项目对 AGENTS.md「不要依赖关键词搜索」的一处刻意例外：
+#   公司官网（jobs.bytedance.com / 校招官网…）的职位索引就是它的类别导航，
+#   用类别+翻页遍历是对的；
+#   但聚合门户（Boss/猎聘/前程无忧/智联）整站产品就是「搜索框」，
+#   打开它们的裸列表页只能拿到全网随机岗位（日志里 Boss 那一站抓到的全是
+#   站点导航链接），方向过滤之后必然为 0。
+# 因此只对 kind=portal 的站做「改写入口为站内搜索 URL」，公司官网通道行为不变。
+PORTAL_SEARCH_URLS = {
+    "zhipin.com": "https://www.zhipin.com/web/geek/job?query={q}",
+    "liepin.com": "https://www.liepin.com/zhaopin/?key={q}",
+    "51job.com": "https://we.51job.com/pc/search?keyword={q}",
+    "zhaopin.com": "https://sou.zhaopin.com/?kw={q}",
+    "lagou.com": "https://www.lagou.com/wn/jobs?kd={q}",
+}
+
+# 候选导航里绝不允许出现（也绝不允许 LLM 选中）的文本：投递/申请/登录类
+# 红线1：绝不自动点击最终「提交/投递申请」按钮
+DANGEROUS_NAV_TEXT = (
+    "投递", "申请", "提交", "立即沟通", "立即联系", "发送简历", "登录", "注册",
+    "apply", "submit", "send resume", "sign in", "log in", "register",
+)
 
 # 招聘聚合平台/内容站：公司通道发现公司时排除这些域名
 AGGREGATOR_DOMAINS = [
@@ -316,13 +360,19 @@ class BrowserJobFinder:
         headless: bool = True,
         timeout_ms: int = 30000,
         max_sites: int = 6,
-        max_jobs_per_site: int = 10,
+        max_jobs_per_site: int = 25,
         max_companies: int = 5,
         interactive: bool = True,
         page_settle_ms: int = 2000,
-        max_list_pages: int = 3,
-        max_card_clicks: int = 12,
+        max_list_pages: int = 4,
+        max_card_clicks: int = 16,
         block_handler: "BlockHandler" = None,
+        max_api_objects: int = 200,
+        portal_keyword_search: bool = True,
+        nav_stay_min_job_links: int = 5,
+        user_data_dir: str = None,
+        persist_login: bool = True,
+        nav_advisor: "NavAdvisor" = None,
     ):
         """
         Args:
@@ -331,34 +381,82 @@ class BrowserJobFinder:
             headless: 是否无头浏览器（交互观察/人工过验证码时建议 False）
             timeout_ms: 页面操作超时（毫秒）
             max_sites: 门户通道单次最多打开几个聚合招聘站
-            max_jobs_per_site: 每个站点最多抽取多少个职位链接
+            max_jobs_per_site: 每个站点最多抽取多少个职位链接（成本上限，可配置）
             max_companies: 公司通道单次最多进入几家公司招聘官网
             interactive: 交互模式（遇到登录墙/验证码时停下汇报给用户处理）
             page_settle_ms: 页面渲染等待时间（毫秒）
             max_list_pages: 每个类别下列表最多翻几页（逐页遍历，控制成本）
             max_card_clicks: 单站最多点击几张职位卡片（SPA 卡片不是 <a> 时取详情 URL 用）
             block_handler: 注入的 HITL 阻断处理器；为空则按 interactive/headless 自建
+            max_api_objects: 单站最多从列表 XHR 里认多少条职位（字节/腾讯这类
+                             1210 个岗位的列表靠接口翻页，40 条的上限会把它们砍到个位数）
+            portal_keyword_search: 聚合门户是否改用「站内搜索 URL」（见 PORTAL_SEARCH_URLS）
+            nav_stay_min_job_links: 当前页已渲染多少个职位详情链接时就认定「已经在列表页，
+                                    不许再做类别导航跳转」（DOM 证据优先于 URL 形状）
+            user_data_dir: 浏览器用户目录；给了就复用登录态（Boss 登录一次可跨轮使用）
+            persist_login: 是否使用持久化用户目录（默认 True；失败自动回退匿名上下文）
+            nav_advisor: 受约束的 LLM 导航裁决器；为空则本次构造按配置决定是否创建
         """
         self.api_key = tavily_api_key or ""
         self.headless = headless
         self.timeout_ms = timeout_ms
         self.max_sites = max_sites
-        self.max_jobs_per_site = max_jobs_per_site
+        self.max_jobs_per_site = max(1, int(max_jobs_per_site))
         self.max_companies = max_companies
         self.interactive = interactive
         self.page_settle_ms = page_settle_ms
         self.max_list_pages = max(1, int(max_list_pages))
         # 卡片点击上限：SPA（腾讯/B站/米哈游/Moka/北森…）靠点击拿详情 URL
         self.max_card_clicks = max(1, int(max_card_clicks))
+        # 接口职位上限：列表 XHR 里的职位对象总数（按配置放开）
+        self.max_api_objects = max(10, int(max_api_objects))
+        self.portal_keyword_search = bool(portal_keyword_search)
+        self.nav_stay_min_job_links = max(1, int(nav_stay_min_job_links))
+        # 相对路径按项目根解析：否则从别的目录启动时登录态会落到别处（等于没复用）
+        self.user_data_dir = self._abs_project_path(user_data_dir)
+        self.persist_login = bool(persist_login)
         # 统一的「停下汇报 -> 用户处理 -> 回车继续」处理器
         self.block_handler = block_handler or BlockHandler(
             interactive=interactive, headless=headless
         )
+        # 只做「选择/否决」，不做动作的 LLM 导航裁决器（可配置关闭）
+        self.nav_advisor = nav_advisor
 
         self._client: Optional[TavilyClient] = None
         self._playwright = None
         self._browser = None
         self._context = None
+
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _abs_project_path(path: Optional[str]) -> Optional[str]:
+        """把配置里的相对路径按项目根解析（浏览器用户目录必须固定位置）"""
+        if not path:
+            return None
+        return path if os.path.isabs(path) else os.path.join(project_root, path)
+
+    @staticmethod
+    def build_nav_advisor(cfg: Dict = None,
+                          llm_cfg: Dict = None) -> Optional[NavAdvisor]:
+        """
+        按 config.search.nav_advisor + config.llm 构造导航裁决器。
+
+        cfg 为空 / enabled=false 时返回 None（纯确定性规则）。
+        """
+        cfg = cfg or {}
+        if not cfg.get("enabled", False):
+            return None
+        llm_cfg = llm_cfg or {}
+        return NavAdvisor(NavAdvisorConfig(
+            enabled=True,
+            api_key=llm_cfg.get("api_key") or None,
+            base_url=llm_cfg.get("base_url") or None,
+            model=llm_cfg.get("model") or None,
+            max_calls_per_search=cfg.get("max_calls_per_search", 4),
+            timeout_s=cfg.get("timeout_s", 25),
+            max_candidates=cfg.get("max_candidates", 6),
+        ))
+
 
     # ================================================================== #
     # 通道 A：招聘聚合门户
@@ -429,7 +527,13 @@ class BrowserJobFinder:
         try:
             await self._start_browser()
             for site in sites:
-                portal = {"url": site["url"], "title": site.get("name", "")}
+                portal = {
+                    "url": site["url"],
+                    "title": site.get("name", ""),
+                    # kind 传下去：portal=聚合门户（改用站内搜索 URL），
+                    # company_site=公司官网/公司招聘专页（按类别+列表遍历）
+                    "kind": site.get("kind", "portal"),
+                }
                 try:
                     site_jobs = await self._extract_jobs_from_portal(portal, target_info)
                 except Exception as e:
@@ -826,16 +930,78 @@ class BrowserJobFinder:
     # 浏览器生命周期与页面抽取
     # ================================================================== #
     async def _start_browser(self):
+        """
+        启动浏览器。
+
+        persist_login=True 时使用持久化用户目录（launch_persistent_context）：
+        - 用户在可见窗口里登录一次 Boss/猎聘，登录态会落盘并跨「发现阶段 → 抓 JD
+          阶段 → 下一次运行」复用，不必反复登录（反复登录正是页面闪个不停的主因之一）；
+        - 持久化启动失败（目录被占用、旧进程残留…）自动回退到匿名上下文，不中断流程。
+        """
         from playwright.async_api import async_playwright
 
         await self._stop_browser()  # 避免重复启动导致旧实例泄漏
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=self.headless)
-        self._context = await self._browser.new_context(
-            viewport={"width": 1366, "height": 800},
-            locale="zh-CN",
-        )
-        logger.info(f"职位发现浏览器已启动 (headless={self.headless})")
+        args = ["--disable-blink-features=AutomationControlled"]
+
+        ctx = None
+        if self.persist_login and self.user_data_dir:
+            try:
+                os.makedirs(self.user_data_dir, exist_ok=True)
+                ctx = await self._playwright.chromium.launch_persistent_context(
+                    self.user_data_dir,
+                    headless=self.headless,
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                    viewport={"width": 1366, "height": 800},
+                    args=args,
+                )
+                await ctx.add_init_script(
+                    "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+                )
+                logger.info(f"职位发现浏览器已启动（复用登录态目录 {self.user_data_dir}, "
+                            f"headless={self.headless}）")
+            except Exception as e:
+                logger.warning(f"持久化浏览器目录不可用（{e}），回退匿名上下文")
+                ctx = None
+
+        if ctx is not None:
+            self._context = ctx
+            try:
+                self._browser = ctx.browser
+            except Exception:
+                self._browser = None
+        else:
+            self._browser = await self._playwright.chromium.launch(
+                headless=self.headless, args=args
+            )
+            self._context = await self._browser.new_context(
+                viewport={"width": 1366, "height": 800},
+                locale="zh-CN",
+            )
+            logger.info(f"职位发现浏览器已启动 (headless={self.headless})")
+
+        # 新浏览器 = 新会话：之前的「该站已人工处理过」记录不再成立，
+        # 否则用户关掉窗口后自动重建的浏览器会被当成已登录，直接抓空。
+        try:
+            self.block_handler.reset()
+        except Exception:
+            pass
+
+    def _context_alive(self) -> bool:
+        """上下文是否还活着（持久化上下文拿不到 browser.is_connected，用页面探测）"""
+        if self._context is None:
+            return False
+        try:
+            _ = len(self._context.pages)
+        except Exception:
+            return False
+        if self._browser is not None:
+            try:
+                return bool(self._browser.is_connected())
+            except Exception:
+                return False
+        return True
 
     async def _ensure_browser(self) -> bool:
         """
@@ -844,12 +1010,8 @@ class BrowserJobFinder:
         没有这一步时，一次「浏览器被关掉」会让后面所有站点都返回
         「Target page, context or browser has been closed」→ 抽取到 0 个职位。
         """
-        try:
-            if (self._context is not None and self._browser is not None
-                    and self._browser.is_connected()):
-                return True
-        except Exception:
-            pass
+        if self._context_alive():
+            return True
         logger.warning("职位发现浏览器已关闭/失联，正在重建...")
         try:
             await self._start_browser()
@@ -862,16 +1024,23 @@ class BrowserJobFinder:
         try:
             if self._context:
                 await self._context.close()
+        except Exception as e:
+            logger.warning(f"关闭职位发现上下文时出错: {e}")
+        try:
             if self._browser:
                 await self._browser.close()
+        except Exception as e:
+            logger.debug(f"关闭职位发现浏览器时出错（多为持久化上下文已随之关闭）: {e}")
+        try:
             if self._playwright:
                 await self._playwright.stop()
         except Exception as e:
-            logger.warning(f"关闭职位发现浏览器时出错: {e}")
+            logger.warning(f"停止 Playwright 时出错: {e}")
         finally:
             self._context = None
             self._browser = None
             self._playwright = None
+
 
     async def _new_page(self):
         """取一个可用页面；浏览器被关掉时先重建再取，取不到返回 None"""
@@ -963,19 +1132,24 @@ class BrowserJobFinder:
     # ------------------------------------------------------------------ #
     async def _discover_jobs_on_site(self, site_name: str, entry_url: str,
                                      target_info: TargetInstructionSchema,
-                                     drill_list: bool = False) -> List[Dict]:
+                                     drill_list: bool = False,
+                                     portal_search: bool = False) -> List[Dict]:
         """
         单个站点的完整抽取流程：
 
         0) 打开入口页 -> 先查登录墙/验证码（被挡就按 AGENTS.md 停下等人，不瞎点）
         1) 公司官网：先钻取到「校园招聘/全部职位」列表页
-        2) 按官网「类别/方向」导航进入目标分类（不做站内关键词搜索）
+        2) 按官网「类别/方向」导航进入目标分类
+           （聚合门户则相反：入口直接改写成站内搜索 URL —— 见 portal_search）
         3) 列表逐页遍历，收集 <a href> 职位锚点
         4) 锚点不足 -> 用列表 XHR 里的职位对象 + 实测过的详情页 URL 模板补齐
         5) 仍不足 -> 扫描 DOM 职位卡片并点击，取真实详情页 URL
            （腾讯/B站/米哈游/Moka/北森/京东 的卡片都不是 <a href>，
              只数锚点必然 0 个职位，这一步是它们唯一的入口）
         6) 按标题方向相关度排序去重后返回
+
+        Args:
+            portal_search: True=这是聚合门户（Boss/猎聘/前程无忧），用站内搜索 URL 当入口
 
         Returns:
             职位字典列表 [{url, title, company, location, description, source, title_score}]
@@ -988,6 +1162,15 @@ class BrowserJobFinder:
             if page is None:
                 logger.warning(f"{site_name} 无法创建页面（浏览器不可用），跳过")
                 return jobs
+
+            # 聚合门户：把裸列表页入口换成「站内搜索目标岗位」的 URL。
+            # 不做这一步时，打开的只是门户的全网默认 feed（Boss 那一站甚至只抓到
+            # 站点导航链接），方向过滤后必然 0 个岗位。
+            if portal_search and self.portal_keyword_search:
+                search_url = self._portal_search_url(entry_url, target_info)
+                if search_url and search_url != entry_url:
+                    logger.info(f"{site_name} 聚合门户改用站内搜索入口: {search_url}")
+                    entry_url = search_url
 
             api_jobs, handler, api_stats = self._make_api_capture()
             page.on("response", handler)
@@ -1022,7 +1205,9 @@ class BrowserJobFinder:
             list_url = page.url
 
             # 3) 列表逐页遍历
-            scored = await self._collect_list_across_pages(page, target_info)
+            scored = await self._collect_list_across_pages(
+                page, target_info, api_items=api_jobs
+            )
 
             # 列表需要登录 / 出现验证码：停下汇报给用户处理
             blocked_kind = await self._page_looks_blocked(page)
@@ -1036,7 +1221,9 @@ class BrowserJobFinder:
                     return jobs
                 await self._settle_page(page)
                 list_url = page.url
-                scored = await self._collect_list_across_pages(page, target_info)
+                scored = await self._collect_list_across_pages(
+                    page, target_info, api_items=api_jobs
+                )
 
             # 3.0) 类别导航自纠错：如果进「类别」后既没有方向相关的锚点，
             #      接口里也没有方向相关的职位，多半是点进了站点的关键词落地页
@@ -1047,7 +1234,26 @@ class BrowserJobFinder:
                     and not self._has_relevant_api(api_jobs, tk)):
                 if await self._goto_settle(page, pre_cat_url, f"{site_name} 退回原列表页"):
                     list_url = page.url
-                    scored = await self._collect_list_across_pages(page, target_info)
+                    scored = await self._collect_list_across_pages(
+                        page, target_info, api_items=api_jobs
+                    )
+
+            # 3.05) 聚合门户站内搜索兜底：门户的默认 feed 里一个「方向相关」岗位都没有时
+            #       （改写入口没生效 / 该站的搜索参数不认 / 结构不认识），
+            #       用站内搜索框搜一次目标岗位。聚合门户的整个产品就是搜索框，
+            #       不搜就只能拿到全网随机岗位，方向过滤后必然为空。
+            if (self.portal_keyword_search and self._strict_relevance(entry_url)
+                    and not self._has_relevant_anchor(scored, tk)
+                    and not self._has_relevant_api(api_jobs, tk)):
+                if await self._try_role_search(page, self._role_query(target_info)):
+                    logger.info(f"{site_name} 默认列表无方向相关岗位，已改用站内搜索框")
+                    await self._settle_page(page)
+                    list_url = page.url
+                    scored = await self._collect_list_across_pages(
+                        page, target_info, api_items=api_jobs
+                    )
+                else:
+                    logger.info(f"{site_name} 未找到可用的站内搜索框，继续按当前列表处理")
 
             company = self._site_company_name(site_name, entry_url)
             # 聚合门户（Boss/猎聘/前程无忧/智联）：列表里什么方向的岗位都有，
@@ -1055,21 +1261,23 @@ class BrowserJobFinder:
             strict = self._strict_relevance(entry_url)
 
             # 3.1) 锚点通道：真实 <a href>
-            total_anchors = len(scored)
+            #
+            # 顺序很重要：先按「像不像职位详情页」筛，再按方向筛标题。
+            # 反过来的话日志会出现「方向相关 2 个 → 最终 0 个」的假相关
+            # （那 2 个其实是页脚/筛选标签，下一道 _looks_like_job_detail 直接丢掉），
+            # 让人误以为「筛得太狠」，实际是两套判据口径不一致。
             scored_all = scored                      # 兜底通道还要用未筛选的候选
+            total_anchors = len(scored_all)
+            detail_like, reject_stats = self._filter_detail_like(
+                scored_all, list_url, role_toks, tk
+            )
             scored = self._prune_by_title_relevance(
-                scored, tk, keep_all_when_empty=not strict
+                detail_like, tk, keep_all_when_empty=not strict
             )
             relevant_anchors = len(scored)
             for score, a in scored:
                 href = a["href"]
                 head = self._clean_job_title((a.get("text") or "").split("\n", 1)[0])
-                if not href or self._is_nav_text(head):
-                    continue
-                if self._looks_non_job(href) or self._same_list_page(href, list_url):
-                    continue
-                if not self._looks_like_job_detail(head, href, role_toks, tk):
-                    continue
                 if not self._mark_seen(seen, href):
                     continue
                 jobs.append({
@@ -1119,20 +1327,26 @@ class BrowserJobFinder:
 
             logger.info(
                 f"{site_name} 最终抽取 {len(jobs)} 个职位"
-                f"（锚点 {total_anchors} 个/方向相关 {relevant_anchors} 个，"
-                f"JSON 响应 {api_stats['json_responses']} 个，接口认出职位 {len(api_jobs)} 个）"
+                f"（锚点 {total_anchors} 个 → 像职位详情 {len(detail_like)} 个 → "
+                f"方向相关 {relevant_anchors} 个；JSON 响应 {api_stats['json_responses']} 个，"
+                f"接口认出职位 {len(api_jobs)} 个）"
             )
             if not jobs:
                 # 明确写出「0 个」的原因，避免日志里只剩一句「抽取到 0 个职位」
                 logger.warning(
-                    f"{site_name} 本站 0 个职位：列表页 {list_url} 上"
-                    f"锚点 {total_anchors} 个（其中方向相关 {relevant_anchors} 个）、"
+                    f"{site_name} 本站 0 个职位：列表页 {list_url} 上锚点 {total_anchors} 个"
+                    f"（判非职位详情而丢弃 {reject_stats['rejected']} 个：导航文本 "
+                    f"{reject_stats['nav_text']}、非职位路径 {reject_stats['non_job']}、"
+                    f"仍是列表页 {reject_stats['same_list']}、不像详情页 "
+                    f"{reject_stats['not_detail']}｜像详情页 {len(detail_like)} 个，"
+                    f"其中方向相关 {relevant_anchors} 个）、"
                     f"接口职位 {len(api_jobs)} 个、页面可点卡片已尝试点击。"
                     f"常见原因：① 该站需登录/过验证码后才返回职位列表；"
-                    f"② 该站当前确实没有「{target_info.role}」方向的校招岗位；"
+                    f"② 该站当前确实没有「{target_info.role}」方向的岗位；"
                     f"③ 列表由登录态接口下发且卡片不可点击。"
                 )
             return jobs
+
         except Exception as e:
             logger.warning(f"{site_name} 站内抽取失败 {entry_url}: {e}")
             return jobs
@@ -1142,6 +1356,70 @@ class BrowserJobFinder:
                     await page.close()
                 except Exception:
                     pass
+
+    def _filter_detail_like(self, scored, list_url: str, role_toks, title_keywords):
+        """
+        从候选锚点里挑出「真的像职位详情页」的那些，并统计每个丢弃原因。
+
+        之前这段判定内联在收录循环里，导致 `_prune_by_title_relevance` 报出的
+        「方向相关 N 个」和最终真正入库的数量口径不一致（日志里出现
+        「344 个锚点 → 方向相关 2 个 → 最终 0 个」这种看起来自相矛盾的记录）。
+        抽成独立一步后：数字口径一致，且每个原因都能在日志里看到。
+
+        Returns:
+            (kept, stats)  kept=[(score, anchor)]；stats 为各丢弃原因的计数
+        """
+        kept = []
+        stats = {"nav_text": 0, "non_job": 0, "same_list": 0, "not_detail": 0,
+                 "rejected": 0}
+        for score, a in (scored or []):
+            href = a.get("href")
+            head = self._clean_job_title((a.get("text") or "").split("\n", 1)[0])
+            reason = ""
+            if not href or self._is_nav_text(head):
+                reason = "nav_text"
+            elif self._looks_non_job(href):
+                reason = "non_job"
+            elif self._same_list_page(href, list_url):
+                reason = "same_list"
+            elif not self._looks_like_job_detail(head, href, role_toks, title_keywords):
+                reason = "not_detail"
+            if reason:
+                stats[reason] += 1
+                stats["rejected"] += 1
+                continue
+            kept.append((score, a))
+        return kept, stats
+
+    def _role_query(self, target_info: TargetInstructionSchema) -> str:
+        """站内搜索框要输入的岗位词（主岗位名优先，缺省用最短变体）"""
+        terms = query_terms(target_info, limit=2) or []
+        return (target_info.role or "").strip() or (terms[0] if terms else "")
+
+    def _portal_search_url(self, entry_url: str,
+                           target_info: TargetInstructionSchema) -> Optional[str]:
+        """
+        聚合门户入口 -> 「站内搜索目标岗位」的 URL（不认识的门户返回 None）。
+
+        只对已知门户主机改写；公司官网/公司招聘专页不受影响（它们由调用方
+        用 portal_search=False 关掉，且这里的模板也不覆盖它们）。
+        """
+        role = self._role_query(target_info)
+        if not role:
+            return None
+        try:
+            host = (urlparse(entry_url).netloc or "").lower()
+        except Exception:
+            return None
+        if not host:
+            return None
+        for key, tpl in PORTAL_SEARCH_URLS.items():
+            if key in host:
+                try:
+                    return tpl.format(q=quote(role))
+                except Exception:
+                    return None
+        return None
 
     def _fallback_site_jobs(self, api_items: List[Dict], scored_all, list_url: str,
                             target_info, company: str, seen: set,
@@ -1274,11 +1552,29 @@ class BrowserJobFinder:
 
         例如用户找 AI 方向，官网类别栏有 技术类/产品类/设计类 -> 点进“技术类”。
 
-        只接受「站内 + 短文本 + 不是职位详情页」的锚点：
+        只接受「站内 + 短文本 + 不是职位详情页 + 不是提交/登录类」的锚点：
         之前这里会把 `jobs.51job.com/jixiegongchengshi/`、`baike.51job.com/...`、
         `app.mokahr.com/...#/job/<guid>` 之类当成类别导航，一点就离开列表页，
         结果整个站点抽取到 0 个职位。
+
+        「已经在列表页」用两级证据判定，DOM 证据优先于 URL 形状：
+        1) URL 明显是列表/搜索页（_looks_like_listing_url）；或
+        2) 页面已经渲染出 >= nav_stay_min_job_links 个职位详情链接——
+           此时无论导航栏里写了什么（字节校招页的「技术人才项目」「产品与技术」
+           就是含「技术」二字的宣传链接），都不许再跳，否则等于主动丢掉已渲染的岗位。
         """
+        if self._looks_like_listing_url(page.url):
+            logger.info(f"{page.url} 已是职位列表页，跳过类别导航跳转")
+            return None
+
+        page_job_links = await self._job_link_count(page)
+        if page_job_links >= self.nav_stay_min_job_links:
+            logger.info(
+                f"{page.url} 已渲染 {page_job_links} 个职位详情链接，"
+                f"判定已在职位列表页，跳过类别导航跳转"
+            )
+            return None
+
         anchors = await self._collect_anchors(page)
         terms = [t.lower() for t in self._category_match_terms(target_info) if t]
         if not terms:
@@ -1290,7 +1586,7 @@ class BrowserJobFinder:
         except Exception:
             cur, cur_regdom = None, ""
 
-        best_href, best_score = None, 0
+        candidates: List = []          # [(score, text, href)]，供规则与 LLM 共用
         for a in anchors:
             text = (a.get("text") or "").strip()
             href = (a.get("href") or "").strip()
@@ -1301,6 +1597,12 @@ class BrowserJobFinder:
                 continue
             # 职位详情页/职位名不是类别导航
             if self._looks_like_detail_url(href) or any(w in text for w in _JOB_TITLE_WORDS):
+                continue
+            # 宣传/专项项目类导航（人才项目/培养项目…）是介绍页，不是职位类别列表
+            if text.endswith("项目"):
+                continue
+            # 投递/申请/登录类永远不是类别导航（红线1：绝不点提交按钮）
+            if any(w in text.lower() for w in DANGEROUS_NAV_TEXT):
                 continue
             if self._looks_non_job(href) or self._is_junk(href):
                 continue
@@ -1329,11 +1631,41 @@ class BrowserJobFinder:
                 if t and t in low:
                     # 大类词（技术类/产品类）权重高；短类别词次之
                     score += 5 if t.endswith("类") else 3
-            if score > best_score:
-                best_score, best_href = score, href
-        if best_href:
-            logger.info(f"按方向选中官网类别: {best_href}")
-        return best_href if best_score >= 3 else None
+            if score >= 3:
+                candidates.append((score, text, href))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: c[0], reverse=True)
+
+        best_href = candidates[0][2]
+        # 规则已经明确（最高分明显领先）时不花 LLM 的钱；
+        # 只有「多个候选并列/接近」或「当前页已能看到职位链接但仍选了候选」
+        # 这类规则真判不准的情况，才让受约束的裁决器在候选里选/否决。
+        ambiguous = len(candidates) > 1 and candidates[1][0] == candidates[0][0]
+        if self.nav_advisor is not None and (ambiguous or page_job_links > 0):
+            try:
+                pick = await self.nav_advisor.choose(
+                    site=self._host_of(page.url),
+                    page_url=page.url,
+                    role=(target_info.role or ""),
+                    recruit_type=(getattr(target_info, "recruit_type", None) or "campus"),
+                    page_job_links=page_job_links,
+                    candidates=[{"text": c[1], "href": c[2]} for c in candidates],
+                    deterministic_pick={"text": candidates[0][1], "href": candidates[0][2]},
+                )
+            except Exception as e:      # 裁决器永不阻塞主流程
+                logger.warning(f"导航裁决器异常（按规则继续）: {e}")
+                pick = None
+            if pick == -1:
+                logger.info("导航裁决：留在当前页，不做类别跳转")
+                return None
+            if isinstance(pick, int) and 0 <= pick < len(candidates):
+                best_href = candidates[pick][2]
+
+        logger.info(f"按方向选中官网类别: {best_href}")
+        return best_href
+
 
     async def _goto_next_list_page(self, page) -> bool:
         """点击「下一页 / 加载更多」。成功翻到下一页返回 True，没有下一页返回 False。"""
@@ -1357,11 +1689,17 @@ class BrowserJobFinder:
         return False
 
     async def _collect_list_across_pages(
-        self, page, target_info: TargetInstructionSchema, max_pages: int = None
+        self, page, target_info: TargetInstructionSchema, max_pages: int = None,
+        api_items: List[Dict] = None,
     ) -> List:
         """
         在当前类别/列表页上逐页遍历，把每一页的职位锚点都收集起来。
         返回 [(score, anchor)] 保序去重，最多翻 max_pages 页。
+
+        api_items：列表 XHR 的实时结果列表（response 回调一直在往里追加）。
+        传进来只是为了在日志里显示「翻页后接口职位涨到多少」——SPA 站（字节/腾讯）
+        往往一个 a[href] 都没有，翻页的收益全在接口职位数上，没有这个数字
+        就看不出「翻了 4 页但一条新岗位都没多」这种问题。
         """
         role_toks = self._role_tokens(target_info)
         max_pages = max(1, int(max_pages or self.max_list_pages))
@@ -1377,12 +1715,17 @@ class BrowserJobFinder:
                 seen.add(href)
                 collected.append((s, a))
                 added += 1
-            logger.info(f"列表第 {page_no + 1} 页收集 {added} 个职位锚点（累计 {len(collected)}）")
+            api_note = f"，接口职位累计 {len(api_items)}" if api_items is not None else ""
+            logger.info(
+                f"列表第 {page_no + 1} 页收集 {added} 个职位锚点"
+                f"（累计 {len(collected)}{api_note}）"
+            )
             if page_no == max_pages - 1:
                 break
             if not await self._goto_next_list_page(page):
                 break
         return collected
+
 
     @staticmethod
     def _clean_job_title(text: str) -> str:
@@ -1523,8 +1866,14 @@ class BrowserJobFinder:
         return found, on_response, stats
 
     def _walk_jobs_json(self, node, found, depth=0):
-        """递归遍历 JSON，提取职位对象（职位名 + 职位ID/链接 + 城市）"""
-        if depth > 9 or len(found) >= 40:
+        """
+        递归遍历 JSON，提取职位对象（职位名 + 职位ID/链接 + 城市）。
+
+        上限原来是硬编码 40：字节校招列表有 1210+ 个岗位，翻页拿到的接口职位
+        会被这条上限直接砍掉，表现就是「列表显示 1210 个岗位，Agent 只找到 6 个」。
+        现在改成 max_api_objects（config.search.max_api_objects，可配置的成本上限）。
+        """
+        if depth > 9 or len(found) >= self.max_api_objects:
             return
         name_keys = ("positionname", "jobname", "postname", "jobtitle", "positiontitle",
                      "jobadname", "recruitpost", "adname", "name", "title")
@@ -1574,8 +1923,11 @@ class BrowserJobFinder:
             for v in node.values():
                 self._walk_jobs_json(v, found, depth + 1)
         elif isinstance(node, list):
-            for v in node[:80]:
+            # 列表分支原来硬编码 node[:80]：一个 200 条的职位列表会被砍到 80 条。
+            # 上限统一走 max_api_objects（成本上限，可配置）。
+            for v in node[: max(1, self.max_api_objects)]:
                 self._walk_jobs_json(v, found, depth + 1)
+
 
     def _looks_like_job_name(self, name: str) -> bool:
         """排除枚举/分类/城市等非职位名"""
@@ -1923,6 +2275,8 @@ class BrowserJobFinder:
         jobs = await self._discover_jobs_on_site(
             portal.get("title") or self._guess_company(url) or url, url, target_info,
             drill_list=bool(portal.get("drill_list")),
+            # 只有「聚合门户」才把入口改写成站内搜索 URL；公司官网仍走类别+列表遍历
+            portal_search=(portal.get("kind") == "portal"),
         )
         for job in jobs:
             # 门户标题推断出的公司名作为缺失时的兜底；接口/页面已给出公司名时保留
@@ -2012,9 +2366,14 @@ class BrowserJobFinder:
         if re.search(r"/(position|job)s?/\d+", path):
             return False
         list_hints = ("/positions", "/jobs", "/joblist", "/job-list", "/vacancies",
-                      "/recruit", "/campus", "/social", "/experienced", "/hire")
+                      "/recruit", "/campus", "/social", "/experienced", "/hire",
+                      # 聚合门户的「列表/搜索页」路径：Boss 的 /web/geek/job、
+                      # 猎聘的 /zhaopin/。它们在 URL 上不像列表页，但一进去就是
+                      # 岗位列表，同样不该再被类别导航带走。
+                      "/geek/job", "/zhaopin", "/searchjob", "/joblist")
         blob = f"{netloc}{path}?{p.query}"
         return any(h in blob for h in list_hints)
+
 
     async def _try_role_search(self, page, role: str) -> bool:
         """招聘站带搜索框时，输入目标岗位触发站内检索"""
@@ -2112,8 +2471,16 @@ class BrowserJobFinder:
         """
         页面是否真的不可用：返回 'captcha' / 'login' / ''。
 
-        只要页面上已经有足够多的职位链接（说明列表已渲染出来），
-        就直接认为可用——避免把正常页面的验证组件误判成验证墙。
+        判定顺序（尽可能少地误伤正常页面）：
+        1) 页面上已经有足够多的职位链接（说明列表已渲染出来）→ 直接认为可用。
+           智联/Boss 这类站点正常页面里也带着验证组件与「短信验证码登录」入口，
+           只按文案判会把一个明明有 150+ 职位链接的页面整站跳过。
+        2) 正文命中「强」验证墙特征（请完成安全验证/滑动验证/unusual traffic…）
+           → 判定 captcha。
+        3) 正文只命中弱特征（例如「验证码」三个字）时，**必须**同时满足
+           「DOM 里真的有验证控件」或「DOM 里有密码输入框（登录弹窗）」才算被挡。
+        4) 登录墙只认 DOM 证据（存在密码输入框且没有职位列表），不再按
+           「扫码登录」这类页眉文案判定。
         """
         job_links = await self._job_link_count(page)
         if job_links >= 5:
@@ -2122,11 +2489,39 @@ class BrowserJobFinder:
         if job_links == 0 and len(body) < 200:
             # 内容都没有：可能是空白/跳转页，交给后续流程处理
             return ""
-        if self._has_captcha_or_wall(body):
+        low = (body or "").lower()
+        if any(h.lower() in low for h in STRONG_CAPTCHA_HINTS):
             return "captcha"
-        if self._looks_login_wall(body):
+
+        probe = await self._block_probe(page)
+        if job_links == 0 and probe.get("password_inputs"):
+            # 有密码框、又几乎没有职位链接：真正的登录墙
+            return "login"
+        if self._has_captcha_or_wall(body):
+            if probe.get("captcha_inputs") or probe.get("captcha_boxes"):
+                return "captcha"
+            logger.info("页面正文含验证字样，但 DOM 里没有验证控件/密码框，按正常页面继续")
+            return ""
+        if self._looks_login_wall(body) and probe.get("login_forms"):
             return "login"
         return ""
+
+    async def _block_probe(self, page) -> Dict:
+        """
+        用 DOM 证据回答「这道墙是不是真的」：数密码框、验证码输入框、验证控件、登录表单。
+
+        只读计数、不点击任何东西。任何一步失败都按 0 计（宁可不判被挡，也不误伤）。
+        """
+        out = {"password_inputs": 0, "captcha_inputs": 0, "captcha_boxes": 0,
+               "login_forms": 0}
+        for key, selector in _BLOCK_PROBE_SELECTORS.items():
+            try:
+                n = await page.eval_on_selector_all(selector, "els => els.length")
+                out[key] = int(n or 0)
+            except Exception:
+                out[key] = 0
+        return out
+
 
     async def _job_link_count(self, page) -> int:
         """页面上「像职位详情」的链接数量（用于判断列表是否真的渲染出来了）"""
