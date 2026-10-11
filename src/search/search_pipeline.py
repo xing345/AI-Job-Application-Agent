@@ -93,14 +93,22 @@ class SearchPipeline:
         max_card_clicks: int = 16,
         max_api_objects: int = 200,
         jd_concurrency: int = 3,
-        portal_keyword_search: bool = True,
+        portal_keyword_search: bool = False,
         nav_advisor_config: dict = None,
         llm_config: dict = None,
         browser_config: dict = None,
     ):
+        # 交互找岗必须用可见浏览器：无头时 BlockHandler 会静默跳过登录墙，
+        # 用户根本没有机会手动登录后再让 Agent 继续。
+        if interactive and use_browser and headless:
+            logger.warning(
+                "交互模式已关闭无头浏览器：遇到登录/验证/无法操作时会停下等你处理"
+            )
+            headless = False
+
         # 统一的 HITL 阻断处理器：找岗和抓详情共用，登录/验证码时停下等人处理
         from src.search.hitl import BlockHandler
-        self.block_handler = BlockHandler(interactive=True, headless=headless)
+        self.block_handler = BlockHandler(interactive=interactive, headless=headless)
 
         # 浏览器登录态目录：找岗与抓 JD 共用同一个目录，
         # 用户手动登录一次即可跨阶段/跨轮复用（详见 BrowserJobFinder._start_browser）

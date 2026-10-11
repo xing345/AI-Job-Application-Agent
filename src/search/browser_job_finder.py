@@ -7,9 +7,8 @@ B. 公司官网通道 discover_company_careers()：
    1. 发现目标公司（Tavily 发现或用户指定公司名单，排除聚合招聘平台）
    2. 进入公司官网，确定性地定位「招聘/加入我们/Careers/Jobs」页面
       （首页锚点评分 + 常见路径探测 + jobs./career./hr. 子域探测）
-   3. 在公司招聘站内按目标岗位抽取职位详情链接（必要时使用站内搜索框）
-   4. 仅当抽取结果过少且确有验证码/登录墙时按 AGENTS.md 暂停，
-      交互模式等用户处理后重试一次
+   3. 在公司招聘站内按类别导航 + 列表遍历找岗（不使用站内关键词搜索）
+   4. 遇登录墙 / 验证码 / 无法操作时停下汇报，等人处理后再从断点继续
 
 输出统一为职位字典列表：
     {url, title, company, location, description, source, channel}
@@ -258,6 +257,24 @@ _ANCHOR_JS = """els => els.map(e => ({
     href: e.href || ''
 })).filter(a => a.href && a.text)"""
 
+# 列表页上的类别 Tab / 筛选按钮（不一定是 <a href>）
+_CATEGORY_WIDGET_JS = """() => {
+  const nodes = Array.from(document.querySelectorAll(
+    'a, button, [role="tab"], [role="menuitem"], [role="option"], li'
+  ));
+  const seen = new Set();
+  const out = [];
+  for (const el of nodes) {
+    const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (!text || text.length > 16 || text.length < 2) continue;
+    if (seen.has(text)) continue;
+    seen.add(text);
+    out.push({text, href: el.href || ''});
+    if (out.length >= 80) break;
+  }
+  return out;
+}"""
+
 # 浏览器内执行：从元素属性里挖职位链接（SPA 卡片常用 data-href / onclick 跳转）
 _ATTR_LINK_JS = r"""() => {
   const out = [];
@@ -368,7 +385,7 @@ class BrowserJobFinder:
         max_card_clicks: int = 16,
         block_handler: "BlockHandler" = None,
         max_api_objects: int = 200,
-        portal_keyword_search: bool = True,
+        portal_keyword_search: bool = False,
         nav_stay_min_job_links: int = 5,
         user_data_dir: str = None,
         persist_login: bool = True,
@@ -1196,15 +1213,17 @@ class BrowserJobFinder:
                 list_href = await self._find_job_list_href(page, target_info)
                 await self._goto_settle(page, list_href, f"{site_name} 进入职位列表页")
 
-            # 2) 按方向进入官网类别导航（若进错了类别，下面会自动退回）
+            # 2) 先找官网岗位类别（技术类/产品类…）：可跳转类别页，或点列表上的 Tab
             pre_cat_url = page.url
             cat_href = await self._find_category_link(page, target_info)
             if cat_href:
                 await self._goto_settle(page, cat_href, f"{site_name} 进入目标类别")
+            else:
+                await self._click_matching_category_tab(page, target_info)
 
             list_url = page.url
 
-            # 3) 列表逐页遍历
+            # 3) 列表逐页遍历：先收齐岗位名称，再与画像/方向词比对
             scored = await self._collect_list_across_pages(
                 page, target_info, api_items=api_jobs
             )
@@ -1234,26 +1253,10 @@ class BrowserJobFinder:
                     and not self._has_relevant_api(api_jobs, tk)):
                 if await self._goto_settle(page, pre_cat_url, f"{site_name} 退回原列表页"):
                     list_url = page.url
+                    await self._click_matching_category_tab(page, target_info)
                     scored = await self._collect_list_across_pages(
                         page, target_info, api_items=api_jobs
                     )
-
-            # 3.05) 聚合门户站内搜索兜底：门户的默认 feed 里一个「方向相关」岗位都没有时
-            #       （改写入口没生效 / 该站的搜索参数不认 / 结构不认识），
-            #       用站内搜索框搜一次目标岗位。聚合门户的整个产品就是搜索框，
-            #       不搜就只能拿到全网随机岗位，方向过滤后必然为空。
-            if (self.portal_keyword_search and self._strict_relevance(entry_url)
-                    and not self._has_relevant_anchor(scored, tk)
-                    and not self._has_relevant_api(api_jobs, tk)):
-                if await self._try_role_search(page, self._role_query(target_info)):
-                    logger.info(f"{site_name} 默认列表无方向相关岗位，已改用站内搜索框")
-                    await self._settle_page(page)
-                    list_url = page.url
-                    scored = await self._collect_list_across_pages(
-                        page, target_info, api_items=api_jobs
-                    )
-                else:
-                    logger.info(f"{site_name} 未找到可用的站内搜索框，继续按当前列表处理")
 
             company = self._site_company_name(site_name, entry_url)
             # 聚合门户（Boss/猎聘/前程无忧/智联）：列表里什么方向的岗位都有，
@@ -1345,6 +1348,61 @@ class BrowserJobFinder:
                     f"② 该站当前确实没有「{target_info.role}」方向的岗位；"
                     f"③ 列表由登录态接口下发且卡片不可点击。"
                 )
+                ok = await self._handle_block(
+                    page.url, page, kind="unknown", force=True,
+                    detail=(
+                        f"Agent 无法从本站抽出与「{target_info.role}」相关的岗位。"
+                        "若页面需要登录、切换类别或点到职位列表，请在浏览器里做完后回车，"
+                        "Agent 会再扫一遍；输入 skip 跳过本站。"
+                    ),
+                )
+                if ok:
+                    await self._settle_page(page)
+                    await self._click_matching_category_tab(page, target_info)
+                    scored = await self._collect_list_across_pages(
+                        page, target_info, api_items=api_jobs
+                    )
+                    list_url = page.url
+                    scored_all = scored
+                    detail_like, reject_stats = self._filter_detail_like(
+                        scored_all, list_url, role_toks, tk
+                    )
+                    scored = self._prune_by_title_relevance(
+                        detail_like, tk, keep_all_when_empty=not strict
+                    )
+                    for score, a in scored:
+                        href = a["href"]
+                        head = self._clean_job_title(
+                            (a.get("text") or "").split("\n", 1)[0]
+                        )
+                        if not self._mark_seen(seen, href):
+                            continue
+                        jobs.append({
+                            "url": href, "title": head[:80], "company": company,
+                            "location": target_info.location or "",
+                            "description": "", "source": "browser",
+                            "title_score": score,
+                        })
+                        if len(jobs) >= self.max_jobs_per_site:
+                            break
+                    if len(jobs) < self.max_jobs_per_site:
+                        jobs.extend(self._jobs_from_api(
+                            api_jobs, list_url, target_info, company,
+                            target_info.location or "", seen,
+                            self.max_jobs_per_site - len(jobs), strict=True,
+                        ))
+                    if len(jobs) < self.max_jobs_per_site:
+                        jobs.extend(await self._jobs_from_cards_by_click(
+                            page, list_url, target_info, company,
+                            target_info.location or "", seen,
+                            self.max_jobs_per_site - len(jobs),
+                            prefer_titles=[
+                                j["title"]
+                                for j in self._rank_api_jobs(api_jobs, tk)
+                            ][:10],
+                            skip_titles=[j["title"] for j in jobs],
+                        ))
+                    logger.info(f"{site_name} 人工处理后重试，抽到 {len(jobs)} 个职位")
             return jobs
 
         except Exception as e:
@@ -1665,6 +1723,73 @@ class BrowserJobFinder:
 
         logger.info(f"按方向选中官网类别: {best_href}")
         return best_href
+
+    def _pick_category_widget(
+        self, widgets: List[Dict], target_info: TargetInstructionSchema
+    ) -> Optional[Dict]:
+        """从页面上的 Tab/筛选文案里挑出与目标方向匹配的类别。"""
+        terms = [t.lower() for t in self._category_match_terms(target_info) if t]
+        if not terms or not widgets:
+            return None
+        best, best_score = None, 0
+        for w in widgets:
+            text = (w.get("text") or "").strip()
+            if not (1 <= len(text) <= 16):
+                continue
+            if self._is_nav_text(text):
+                continue
+            if any(d in text.lower() for d in DANGEROUS_NAV_TEXT):
+                continue
+            if any(word in text for word in _JOB_TITLE_WORDS):
+                continue
+            low = text.lower()
+            score = 0
+            for t in terms:
+                if not t:
+                    continue
+                if t in low:
+                    score += 8 if t.endswith("类") else 4
+                else:
+                    stem = t.rstrip("类")
+                    if len(stem) >= 2 and stem in low:
+                        score += 3
+            if score > best_score:
+                best, best_score = w, score
+        return best if best_score >= 3 else None
+
+    async def _click_matching_category_tab(self, page, target_info) -> bool:
+        """
+        已在职位列表页时，点页面上的类别 Tab / 筛选（不离开当前列表）。
+
+        很多官网（字节/美团/B 站）类别是 Tab，URL 已经是 /jobs、/positions，
+        _find_category_link 会故意不跳转；这里补上「先点目标类别再遍历岗位名」。
+        """
+        try:
+            widgets = await page.evaluate(_CATEGORY_WIDGET_JS)
+        except Exception:
+            return False
+        pick = self._pick_category_widget(widgets or [], target_info)
+        if not pick:
+            logger.info("当前页未发现与目标方向匹配的类别 Tab")
+            return False
+        text = pick["text"]
+        href = (pick.get("href") or "").strip()
+        if (href.startswith("http")
+                and href.split("#")[0].rstrip("/") != (page.url or "").split("#")[0].rstrip("/")
+                and not self._looks_like_detail_url(href)
+                and not self._looks_non_job(href)):
+            ok = await self._goto_settle(page, href, f"进入类别「{text}」")
+            if ok:
+                return True
+        try:
+            loc = page.get_by_text(text, exact=True).first
+            await loc.click(timeout=3000)
+            await self._settle_page(page)
+            logger.info(f"已点击页面类别: {text}")
+            return True
+        except Exception:
+            logger.info(f"点击类别「{text}」未成功，继续遍历当前列表")
+            return False
 
 
     async def _goto_next_list_page(self, page) -> bool:
@@ -2420,7 +2545,7 @@ class BrowserJobFinder:
             return ""
 
     async def _handle_block(self, url: str, page, kind: str = "captcha",
-                            detail: str = "") -> bool:
+                            detail: str = "", force: bool = False) -> bool:
         """
         遇到登录墙 / 验证码 / AI 无法操作：统一交给 BlockHandler。
 
@@ -2428,7 +2553,7 @@ class BrowserJobFinder:
             True  -> 用户已手动处理，继续当前站点
             False -> 跳过当前站点
         """
-        return await self.block_handler.handle(kind, url, detail)
+        return await self.block_handler.handle(kind, url, detail, force=force)
 
     async def _wait_if_blocked(self, page, url: str) -> bool:
         """
@@ -2454,16 +2579,27 @@ class BrowserJobFinder:
         )
         if not ok:
             return True
-        # 复核：用户说处理完了，但页面可能还是原来那道墙
+        # 复核：用户说处理完了，但页面可能还是原来那道墙 —— 再问一次，不要静默跳过
         try:
             await self._settle_page(page, light=True)
         except Exception:
             pass
         again = await self._page_looks_blocked(page)
-        if again:
-            logger.warning(
-                f"页面仍处于登录/验证状态（且没有可用职位列表），按跳过处理：{url}"
-            )
+        if not again:
+            return False
+        ok = await self._handle_block(
+            url, page, kind=again, force=True,
+            detail="处理后页面仍像登录墙/验证页。请再完成操作后回车，或输入 skip 跳过本站",
+        )
+        if not ok:
+            return True
+        try:
+            await self._settle_page(page, light=True)
+        except Exception:
+            pass
+        still = await self._page_looks_blocked(page)
+        if still:
+            logger.warning(f"两次确认后页面仍不可用，跳过本站：{url}")
             return True
         return False
 

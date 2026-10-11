@@ -409,42 +409,65 @@ GENERIC_TECH_TITLE_KEYWORDS = list(TITLE_OCCUPATION_WORDS)
 
 def infer_direction(role: str, keywords: Optional[Iterable[str]] = None) -> dict:
     """
-    从用户的模糊方向输入推断岗位大类与方向词族（纯规则、零 API 成本）
+    从用户的模糊方向输入推断岗位大类与方向词族（纯规则、零 API 成本）。
 
-    Args:
-        role: 用户填的目标方向/岗位，如「AI应用开发」「前端」
-        keywords: 简历技能（可辅助判断方向），如 ["PyTorch", "LangChain"]
+    【并集语义】标题相关性词族 = 「用户输入岗位名命中的方向」∪「简历技能命中的方向」。
+    - 用户搜「前端开发工程师」、简历里又有 AI/算法技能时，前端和 AI 两个方向都算相关；
+    - 这样既不会因为简历技能把用户明确要的前端岗位误删，
+      也不会把简历能投的岗位因为"标题里没有输入词"而丢掉。
+    - category/key 仍以「用户输入岗位名」命中的方向为准（简历方向只扩相关性词集）。
 
     Returns:
         {"key", "category", "label", "triggers", "title_keywords"}
-        无法归入具体方向时 key=None；title_keywords 始终是 list（可能为空）。
+        title_keywords 是并集后的完整相关性词集（去重，始终为 list）。
     """
-    blob = " ".join(
-        [str(role or ""), *[str(k) for k in (keywords or [])]]
-    ).lower()
+    role_blob = (str(role or "")).lower()
+    skill_blob = " ".join(str(k) for k in (keywords or [])).lower()
 
-    best, best_hits = None, 0
-    for fam in DIRECTION_FAMILIES:
-        hits = sum(1 for trig in fam["triggers"] if trig.lower() in blob)
-        if hits > best_hits:
-            best, best_hits = fam, hits
+    def _best_family(blob: str):
+        if not blob:
+            return None
+        best, best_hits = None, 0
+        for fam in DIRECTION_FAMILIES:
+            hits = sum(1 for trig in fam["triggers"] if trig.lower() in blob)
+            if hits > best_hits:
+                best, best_hits = fam, hits
+        return best
 
-    if best is not None:
+    role_fam = _best_family(role_blob)
+    skill_fam = _best_family(skill_blob)
+
+    # 并集：角色方向 ∪ 简历技能方向（都算相关）
+    union_kws: List[str] = []
+    for fam in (role_fam, skill_fam):
+        if fam is not None:
+            union_kws.extend(fam["title_keywords"])
+    # 再把 role 本身的词加进去兜底（避免 role 未命中任何词族时变成空集）
+    if role_blob:
+        union_kws.append(role_blob)
+    union_kws = list(dict.fromkeys(k for k in union_kws if k))
+
+    primary = role_fam or skill_fam
+    if primary is not None:
         return {
-            "key": best["key"],
-            "category": best["category"],
-            "label": best["label"],
-            "triggers": list(best["triggers"]),
-            "title_keywords": list(best["title_keywords"]),
+            "key": primary["key"],
+            "category": primary["category"],
+            "label": primary["label"],
+            "triggers": list(primary["triggers"]),
+            "title_keywords": union_kws,
         }
 
+    blob = (role_blob + " " + skill_blob).strip()
     is_tech = any(t in blob for t in _GENERIC_TECH_TRIGGERS)
+    fallback = list(GENERIC_TECH_TITLE_KEYWORDS) if is_tech else []
+    if role_blob:
+        fallback.append(role_blob)
     return {
         "key": None,
         "category": "技术类" if is_tech else "综合类",
         "label": "泛技术" if is_tech else "未分类",
         "triggers": [],
-        "title_keywords": list(GENERIC_TECH_TITLE_KEYWORDS) if is_tech else [],
+        "title_keywords": list(dict.fromkeys(fallback)),
     }
 
 

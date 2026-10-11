@@ -1,409 +1,162 @@
-"""
-求职自动化助手主入口
-基于 LangGraph 状态机的端到端自动化系统
-"""
+"""自动求职 Agent 主入口。
 
-import asyncio
+用法：
+  python -m src.main --site bytedance --resume data/resume.pdf --profile data/user_profile.json
+  python -m src.main --job-url https://jobs.bytedance.com/xxx --resume data/resume.pdf
+  python -m src.main --resume-run <session_id>
+"""
+from __future__ import annotations
+
 import argparse
+import asyncio
+import logging
 import os
-from datetime import datetime
-from loguru import logger
-
-# 添加项目根目录到 Python 路径
 import sys
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+import uuid
+from datetime import datetime
+from pathlib import Path
 
-# 加载 .env（密钥环境变量优先于 config.json）
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(project_root, ".env"))
-    load_dotenv()
-except ImportError:
-    pass
+from dotenv import load_dotenv
 
-from src.orchestrator.graph import ApplicationOrchestrator
-from src.orchestrator.state import AgentStatus, print_state_summary
-from src.models.instruction_schemas import TargetInstructionSchema
-from src.parsers.resume_parser import parse_pdf
+load_dotenv()
+
+from src.agent.graph import build_graph
+from src.agent.state import AgentState
+from src.browser.manager import close_browser, get_browser
+from src.storage import state_db
+
+# 日志配置
+_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
 
 
-def setup_logging(verbose: bool = False):
-    """设置日志"""
-    level = "DEBUG" if verbose else "INFO"
+def setup_logging(verbose: bool = False) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    log_file = _LOG_DIR / f"agent.{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
 
-    # 移除默认处理器
-    logger.remove()
-
-    # 添加控制台输出
-    logger.add(
-        sink=sys.stdout,
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{module}</cyan>: <level>{message}</level>",
+    logging.basicConfig(
         level=level,
-        colorize=True
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
     )
-
-    # 添加文件输出
-    logger.add(
-        sink="application.log",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {module} | {message}",
-        level=level,
-        rotation="10 MB",
-        retention="30 days"
-    )
+    logging.getLogger("playwright").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def validate_inputs(pdf_path: str, job_title: str) -> tuple[bool, str]:
-    """验证输入参数"""
-    errors = []
-
-    if not pdf_path or not os.path.exists(pdf_path):
-        errors.append(f"简历文件不存在: {pdf_path}")
-
-    if not job_title:
-        errors.append("职位名称不能为空")
-
-    return len(errors) == 0, "; ".join(errors)
-
-
-def create_target_instruction(args) -> TargetInstructionSchema:
-    """创建目标指令"""
-    companies = args.companies.split(",") if args.companies else []
-    return TargetInstructionSchema(
-        company=companies[0].strip() if companies else "",
-        role=args.job,
-        location=args.location,
-        keywords=args.keywords.split(",") if args.keywords else [],
-        exclude_keywords=args.exclude.split(",") if args.exclude else []
-    )
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="自动求职 Agent")
+    parser.add_argument("--site", type=str, default="", help="招聘站点名称（如 bytedance, bilibili, tencent）")
+    parser.add_argument("--job-url", type=str, action="append", default=[], help="直接指定岗位详情页 URL（可多次指定，跳过岗位发现）")
+    parser.add_argument("--resume", type=str, default="", help="简历文件路径（PDF/JSON/TXT）")
+    parser.add_argument("--profile", type=str, default="", help="用户画像 JSON 路径")
+    parser.add_argument("--discover-url", type=str, default="", help="直接指定任意招聘列表页 URL，自动发现岗位（无需预先注册站点）")
+    parser.add_argument("--resume-run", type=str, default="", help="断点续跑：指定 session_id 恢复上次状态")
+    parser.add_argument("--verbose", "-v", action="store_true", help="详细日志")
+    parser.add_argument("--list-sites", action="store_true", help="列出支持的招聘站点")
+    return parser.parse_args()
 
 
-def print_banner():
-    """打印启动横幅"""
-    banner = """
-    ╔════════════════════════════════════════════════════╗
-    ║                                                    ║
-    ║              🤖 求职自动化助手                     ║
-    ║        AI-Powered Job Application Assistant         ║
-    ║                                                    ║
-    ║      Powered by LangGraph + Playwright + AI         ║
-    ║                                                    ║
-    ╚════════════════════════════════════════════════════╝
-    """
-    print(banner)
-
-
-def print_usage_examples():
-    """打印使用示例"""
-    examples = """
-    📖 使用示例:
-
-    # 基本用法
-    python main.py -r resume.pdf -j "前端开发工程师"
-
-    # 完整参数
-    python main.py \\
-        --resume resume.pdf \\
-        --job "前端开发工程师" \\
-        --companies "字节跳动,腾讯,阿里巴巴" \\
-        --location "北京" \\
-        --salary "15-25K" \\
-        --experience "3-5年" \\
-        --keywords "React,Vue,TypeScript" \\
-        --exclude "管理,销售" \\
-        --max-applications 10 \\
-        --sites "boss,zhipin" \\
-        --verbose
-
-    # 简历信息查看
-    python main.py --info resume.pdf
-
-    # 使用配置文件
-    python main.py --config config.json
-    """
-    print(examples)
-
-
-async def run_interactive_mode():
-    """运行交互模式"""
-    print("\n🎯 交互模式 - 请输入您的求职需求")
-
-    # 获取简历文件
-    while True:
-        pdf_path = input("\n📄 请输入简历 PDF 文件路径: ").strip()
-        if os.path.exists(pdf_path):
-            break
-        print("❌ 文件不存在，请重新输入")
-
-    # 获取求职信息
-    print("\n📋 求职信息配置:")
-    job_title = input("🎯 目标职位: ").strip()
-
-    print("\n🏢 公司偏好 (用逗号分隔，留空则不限):")
-    companies = input("   例如: 字节跳动,腾讯,阿里巴巴: ").strip()
-
-    print("\n📍 工作地点 (留空则不限):")
-    location = input("   例如: 北京,上海,深圳: ").strip()
-
-    print("\n🔑 技能关键词 (用逗号分隔):")
-    keywords = input("   例如: React,Vue,TypeScript: ").strip()
-
-    print("\n🚫 排除关键词 (用逗号分隔):")
-    exclude = input("   例如: 管理,销售: ").strip()
-
-    # 创建指令
-    companies_list = companies.split(",") if companies else []
-    instruction = TargetInstructionSchema(
-        company=companies_list[0].strip() if companies_list else "",
-        role=job_title,
-        location=location,
-        keywords=keywords.split(",") if keywords else [],
-        exclude_keywords=exclude.split(",") if exclude else []
-    )
-
-    return pdf_path, instruction
-
-
-async def resume_info_mode(pdf_path: str):
-    """简历信息查看模式"""
-    print(f"\n📄 正在解析简历: {pdf_path}")
-
-    try:
-        # 解析简历
-        resume = await parse_pdf(pdf_path)
-
-        if not resume:
-            print("❌ 简历解析失败")
-            return
-
-        # 打印简历信息
-        print(f"\n{'='*60}")
-        print("👤 简历信息")
-        print(f"{'='*60}")
-        print(f"姓名: {resume.name}")
-        print(f"电话: {resume.phone}")
-        print(f"邮箱: {resume.email}")
-        print(f"个人简介: {resume.summary}")
-
-        if resume.work_experience:
-            print(f"\n💼 工作经历 ({len(resume.work_experience)} 条):")
-            for i, work in enumerate(resume.work_experience[:3], 1):
-                print(f"\n  {i}. {work.company} - {work.position}")
-                print(f"     时间: {work.start_date} 至 {work.end_date}")
-                print(f"     描述: {work.description[:100]}...")
-
-        if resume.projects:
-            print(f"\n🚀 项目经验 ({len(resume.projects)} 个):")
-            for i, project in enumerate(resume.projects[:3], 1):
-                print(f"\n  {i}. {project.name}")
-                print(f"     描述: {project.description[:100]}...")
-                print(f"     技术栈: {', '.join(project.technologies[:5])}")
-
-        if resume.skills:
-            print(f"\n💡 技能列表:")
-            skills = resume.skills[:20]  # 显示前20个技能
-            print(f"   {', '.join(skills)}")
-
-        print(f"\n{'='*60}")
-
-    except Exception as e:
-        print(f"❌ 解析简历时出错: {e}")
-
-
-async def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(
-        description="求职自动化助手 - 基于AI的职位申请自动化工具",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="\n使用 --help 查看更多帮助信息"
-    )
-
-    # 基本参数
-    parser.add_argument(
-        "-r", "--resume",
-        type=str,
-        help="简历 PDF 文件路径"
-    )
-
-    parser.add_argument(
-        "-j", "--job",
-        type=str,
-        help="目标职位名称"
-    )
-
-    # 可选参数
-    parser.add_argument(
-        "--companies",
-        type=str,
-        help="目标公司列表 (用逗号分隔)"
-    )
-
-    parser.add_argument(
-        "--location",
-        type=str,
-        help="工作地点"
-    )
-
-    parser.add_argument(
-        "--salary",
-        type=str,
-        help="期望薪资范围"
-    )
-
-    parser.add_argument(
-        "--experience",
-        type=str,
-        help="工作经验要求"
-    )
-
-    parser.add_argument(
-        "--keywords",
-        type=str,
-        help="技能关键词 (用逗号分隔)"
-    )
-
-    parser.add_argument(
-        "--exclude",
-        type=str,
-        help="排除关键词 (用逗号分隔)"
-    )
-
-    parser.add_argument(
-        "--max-applications",
-        type=int,
-        default=10,
-        help="最大申请数量 (默认: 10)"
-    )
-
-    parser.add_argument(
-        "--sites",
-        type=str,
-        help="优先招聘网站 (用逗号分隔)"
-    )
-
-    # 模式选择
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="启用交互模式"
-    )
-
-    parser.add_argument(
-        "--info",
-        type=str,
-        help="查看简历信息模式"
-    )
-
-    parser.add_argument(
-        "--config",
-        type=str,
-        help="使用配置文件"
-    )
-
-    # 输出选项
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="详细输出"
-    )
-
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="预运行模式（只显示将要执行的操作，不实际执行）"
-    )
-
-    args = parser.parse_args()
-
-    # 设置日志
+async def main() -> None:
+    args = parse_args()
     setup_logging(args.verbose)
+    logger = logging.getLogger(__name__)
 
-    # 打印横幅
-    print_banner()
-
-    # 处理不同模式
-    if args.info:
-        # 简历信息模式
-        await resume_info_mode(args.info)
+    if args.list_sites:
+        from src.search.site_registry import list_sites
+        print("支持的招聘站点：")
+        for s in list_sites():
+            print(f"  - {s}")
         return
 
-    if args.interactive or not (args.resume and args.job):
-        # 交互模式
-        pdf_path, instruction = await run_interactive_mode()
-    else:
-        # 命令行模式
-        # 验证输入
-        valid, error_msg = validate_inputs(args.resume, args.job)
-        if not valid:
-            print(f"❌ 输入错误: {error_msg}")
-            return
+    session_id = args.resume_run or str(uuid.uuid4())[:8]
+    logger.info("=== 自动求职 Agent 启动 | session=%s ===", session_id)
 
-        # 创建指令
-        instruction = create_target_instruction(args)
-        pdf_path = args.resume
+    # 处理 --discover-url：动态注册任意招聘网站
+    site_name = args.site
+    if args.discover_url:
+        from urllib.parse import urlparse
+        from src.search.site_registry import SiteConfig, register_site, get_site_config
+        parsed = urlparse(args.discover_url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        site_name = parsed.netloc.replace(".", "_").replace(":", "_")
+        # 检查是否已注册
+        if not get_site_config(site_name):
+            register_site(SiteConfig(
+                name=site_name,
+                base_url=base_url,
+                category_url=args.discover_url,
+                pagination_type="scroll",
+                max_pages=50,
+                description=f"自定义站点: {base_url}",
+            ))
+            logger.info("动态注册站点: %s -> %s", site_name, args.discover_url)
 
-    print(f"\n🚀 开始执行求职流程...")
-    print(f"📄 简历文件: {pdf_path}")
-    print(f"🎯 目标职位: {instruction.role}")
+    state = AgentState(
+        site_name=site_name,
+        job_urls=args.job_url,
+        resume_path=args.resume,
+        profile_path=args.profile,
+    )
 
-    if instruction.company:
-        print(f"🏢 目标公司: {instruction.company}")
-
-    # 创建编排器
-    orchestrator = ApplicationOrchestrator()
-
-    # 如果是预运行模式
-    if args.dry_run:
-        print("\n🔍 预运行模式 - 显示将要执行的操作:")
-        print("\n1. 解析简历 PDF")
-        print("2. 搜索匹配的职位")
-        print("3. 筛选高匹配度职位")
-        print("4. 自动填写申请表单")
-        print("5. 发送通知（可选）")
-        print("\n💡 提示: 实际运行时会显示更详细的进度信息")
-        return
-
-    # 执行流程
-    try:
-        start_time = datetime.now()
-
-        # 运行自动化流程
-        result = await orchestrator.run_application(
-            pdf_path=pdf_path,
-            target_instruction=instruction
-        )
-
-        end_time = datetime.now()
-        duration = end_time - start_time
-
-        # 打印执行结果
-        print(f"\n{'='*60}")
-        print("📊 执行报告")
-        print(f"{'='*60}")
-        print(f"⏱️  执行时间: {duration}")
-        print(f"✅ 最终状态: {result['status']}")
-        print(f"📈 总进度: {result['progress']:.1f}%")
-
-        if result['status'] == AgentStatus.COMPLETED:
-            print(f"🎉 成功完成！")
-            print(f"📋 提交申请: {len(result['submitted_urls'])} 个")
-            print(f"🔍 找到职位: {len(result['qualified_urls'])} 个")
+    if args.resume_run:
+        saved = state_db.load_latest_state(args.resume_run)
+        if saved:
+            state = AgentState.model_validate(saved)
+            logger.info("恢复断点状态: %s", args.resume_run)
         else:
-            print(f"❌ 执行失败")
-            if result['errors']:
-                print(f"🚨 错误信息:")
-                for error in result['errors'][-3:]:
-                    print(f"   - {error}")
+            logger.warning("未找到会话 %s 的保存状态，将从头开始", args.resume_run)
 
-        # 保存日志
-        log_file = f"job_application_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-        print(f"\n📝 详细日志已保存到: {log_file}")
+    if not state.site_name and not state.job_urls:
+        print("错误：请指定 --site 或 --job-url")
+        print("使用 --list-sites 查看支持的站点")
+        sys.exit(1)
+
+    try:
+        await get_browser()
+        logger.info("Browser ready")
+
+        graph = build_graph()
+        result = await graph.ainvoke(state)
+
+        # LangGraph 可能返回 dict，统一转成 AgentState
+        if isinstance(result, dict):
+            final_state = AgentState.model_validate(result)
+        else:
+            final_state = result
+
+        state_db.save_state(session_id, final_state.model_dump(mode="json"))
+
+        print("\n" + "=" * 60)
+        print("=== 运行结束 ===")
+        print(f"会话 ID: {session_id}")
+        if final_state.errors:
+            print(f"错误 ({len(final_state.errors)}):")
+            for e in final_state.errors[-10:]:
+                print(f"  - {e}")
+        if final_state.apply_queue:
+            print(f"投递队列: {len(final_state.apply_queue)} 个岗位")
+        if final_state.match_results:
+            print(f"匹配结果: {len(final_state.match_results)} 个岗位")
+            top = final_state.match_results[0]
+            print(f"最高匹配: {top.job_title} ({top.score}分)")
+        print("=" * 60)
 
     except KeyboardInterrupt:
-        print("\n\n⚠️  用户中断执行")
+        logger.info("用户中断")
+        state_db.save_state(session_id, state.model_dump(mode="json"))
+        print(f"\n已保存状态，可用 --resume-run {session_id} 恢复")
     except Exception as e:
-        logger.error(f"执行过程中发生错误: {e}")
-        print(f"\n❌ 执行失败: {e}")
+        logger.exception("Agent 运行失败: %s", e)
+        state_db.save_state(session_id, state.model_dump(mode="json"))
+        print(f"\n运行失败: {e}")
+        print(f"已保存状态，可用 --resume-run {session_id} 恢复")
+    finally:
+        await close_browser()
+        logger.info("Browser closed")
 
 
 if __name__ == "__main__":

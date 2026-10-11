@@ -22,7 +22,7 @@
     "max_card_clicks": 16,
     "max_api_objects": 200,
     "jd_concurrency": 3,
-    "portal_keyword_search": true,
+    "portal_keyword_search": false,
     "nav_advisor": {
       "enabled": true,
       "max_calls_per_search": 4,
@@ -36,7 +36,7 @@
     "dry_run": false
   },
   "browser": {
-    "headless": true,
+    "headless": false,
     "timeout": 30000,
     "max_retries": 3,
     "persist_login": true,

@@ -108,7 +108,7 @@ class AgentOrchestrator:
                 'max_card_clicks': 16,
                 'max_api_objects': 200,
                 'jd_concurrency': 3,
-                'portal_keyword_search': True,
+                'portal_keyword_search': False,
                 'nav_advisor': {
                     'enabled': True,
                     'max_calls_per_search': 4,
@@ -1323,7 +1323,7 @@ DEFAULT_AGENT_CONFIG = {
         'max_card_clicks': 16,
         'max_api_objects': 200,
         'jd_concurrency': 3,
-        'portal_keyword_search': True,
+        'portal_keyword_search': False,
         'nav_advisor': {
             'enabled': True,
             'max_calls_per_search': 4,

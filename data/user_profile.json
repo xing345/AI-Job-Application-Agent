@@ -1,19 +1,57 @@
 {
-  "name": "",
-  "email": "",
-  "phone": "",
-  "self_introduction": "",
-  "all_skills": [],
-  "skill_notes": "",
+  "name": "张亚辉",
+  "phone": "15638108926",
+  "email": "313206376@qq.com",
+  "education": [
+    {
+      "school": "重庆移通学院",
+      "major": "软件工程",
+      "degree": "本科",
+      "start_date": "2023-09",
+      "end_date": "2027-06",
+      "description": ""
+    }
+  ],
   "work_experience": [],
-  "education": [],
-  "projects": [],
-  "certificates": [],
-  "languages": [],
-  "target_hint": "",
-  "industries_interest": [],
-  "locations": [],
-  "salary_expectation": "",
-  "work_type": "",
-  "deal_breakers": []
+  "projects": [
+    {
+      "name": "基于 FISCO BCOS 与 IPFS 的分布式存储系统",
+      "role": "后端开发",
+      "tech_stack": ["Solidity", "FISCO BCOS", "IPFS", "Node.js", "JavaScript"],
+      "description": "区块链分布式存储项目，负责智能合约编写与后端接口开发",
+      "achievements": ""
+    },
+    {
+      "name": "AI Agent 自动求职系统",
+      "role": "全栈开发",
+      "tech_stack": ["Python", "LangGraph", "Playwright", "Pydantic", "LLM API"],
+      "description": "基于 LangGraph 的 LLM-driven 求职 Agent，实现岗位发现、语义匹配、自动填表全流程",
+      "achievements": ""
+    },
+    {
+      "name": "Vue/uni-app 小程序项目",
+      "role": "前端开发",
+      "tech_stack": ["Vue 2", "uni-app", "JavaScript", "TypeScript"],
+      "description": "跨端小程序开发",
+      "achievements": ""
+    },
+    {
+      "name": "Cocos Creator 小游戏",
+      "role": "开发",
+      "tech_stack": ["Cocos Creator 3.8.8", "TypeScript"],
+      "description": "小游戏开发实践",
+      "achievements": ""
+    }
+  ],
+  "skills": [
+    "Java", "JavaScript", "TypeScript", "Python", "C++", "Go", "Solidity",
+    "Spring", "Vue 2", "uni-app", "Django", "Cocos Creator",
+    "LangGraph", "Pydantic", "Playwright",
+    "FISCO BCOS", "IPFS", "LLM API", "AI Agent", "Prompt Engineering"
+  ],
+  "target_cities": ["北京", "深圳", "广州", "成都", "重庆"],
+  "target_directions": ["前端开发", "Web前端开发", "小程序开发", "全栈开发", "AI Agent开发"],
+  "expected_salary": "",
+  "available_date": "2027-07",
+  "self_introduction": "重庆移通学院软件工程专业在读，掌握 Java/JavaScript/Python/Go/Solidity 等多语言，具备前端（Vue/uni-app）、后端（Spring/Django）、区块链（FISCO BCOS/Solidity）和 AI Agent（LangGraph/Playwright）全栈实践经验。动手能力强，习惯通过编码实践和复盘持续学习，关注 AI 与前端结合的应用场景。"
 }

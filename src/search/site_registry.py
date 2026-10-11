@@ -1,65 +1,167 @@
+"""招聘站点配置注册表。
+
+岗位发现使用通用策略（URL 模式 + 文本特征 + 滚动加载），
+不依赖特定网站的 selector。专用 selector 仅作为可选优化。
 """
-固定招聘站点清单
+from __future__ import annotations
 
-不再用 Tavily 自动「搜索有哪些招聘网站」。改为：
-- 内置固定门户：Boss直聘 / 猎聘 / 前程无忧 —— 每次必找；
-- 用户自定义文件（data/job_sites.json）：你自己往里加别的招聘站/公司官网，
-  这些站会在内置三站之外额外加入找岗。
-"""
-
-import json
-import os
-from typing import Dict, List
-
-# 每次必找的固定门户（职位列表/搜索页入口）
-BUILTIN_JOB_SITES = [
-    {"name": "Boss直聘", "url": "https://www.zhipin.com/web/geek/job", "kind": "portal"},
-    {"name": "猎聘", "url": "https://www.liepin.com/zhaopin/", "kind": "portal"},
-    {"name": "前程无忧", "url": "https://we.51job.com/pc/search", "kind": "portal"},
-]
-
-DEFAULT_SITES_FILE = os.path.join("data", "job_sites.json")
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 
-def _project_root() -> str:
-    # src/search/site_registry.py -> 上三级即项目根
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+@dataclass
+class SiteConfig:
+    """招聘站点配置。"""
+
+    name: str
+    base_url: str
+    category_url: str = ""  # 分类导航页 URL
+    max_applications_per_cycle: int = 3
+    cycle_days: int = 30
+
+    # 专用 selector（可选，留空则使用通用发现策略）
+    job_card_selector: str = ""
+    job_title_selector: str = ""
+    job_link_selector: str = ""
+    job_location_selector: str = ""
+    job_company_selector: str = ""
+
+    # 分页
+    pagination_type: str = "scroll"  # scroll / page_param / click_next
+    page_param_name: str = "page"
+    max_pages: int = 50
+
+    description: str = ""
 
 
-def load_extra_sites(path: str = None) -> List[Dict]:
-    """读取用户自定义站点文件，只保留合法 http(s) 链接。"""
-    path = path or os.path.join(_project_root(), DEFAULT_SITES_FILE)
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:  # 文件坏了不要崩，视为没有额外站点
-        from loguru import logger
-        logger.warning(f"读取自定义站点文件失败 {path}: {e}")
-        return []
+# 内置站点配置
+# 注意：大部分站点不配置专用 selector，使用通用发现策略
+# 只有经过验证的站点才配置专用 selector 作为优化
+_SITES: Dict[str, SiteConfig] = {
+    "bytedance": SiteConfig(
+        name="bytedance",
+        base_url="https://jobs.bytedance.com",
+        category_url="https://jobs.bytedance.com/campus/position",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        # 字节跳动已验证：岗位链接格式 /campus/position/{ID}/detail
+        job_card_selector="a[href*='/campus/position/'][href*='/detail']",
+        pagination_type="scroll",
+        max_pages=50,
+        description="字节跳动校招",
+    ),
+    "bilibili": SiteConfig(
+        name="bilibili",
+        base_url="https://jobs.bilibili.com",
+        category_url="https://jobs.bilibili.com/campus/positions",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="哔哩哔哩校招",
+    ),
+    "tencent": SiteConfig(
+        name="tencent",
+        base_url="https://join.qq.com",
+        category_url="https://join.qq.com/post.html",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="腾讯校招",
+    ),
+    "jd": SiteConfig(
+        name="jd",
+        base_url="https://campus.jd.com",
+        category_url="https://campus.jd.com/home#/jobs",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="京东校招",
+    ),
+    "mihoyo": SiteConfig(
+        name="mihoyo",
+        base_url="https://jobs.mihoyo.com",
+        category_url="https://jobs.mihoyo.com/#/campus/position",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="米哈游校招",
+    ),
+    "zte": SiteConfig(
+        name="zte",
+        base_url="https://app.mokahr.com",
+        category_url="https://app.mokahr.com/campus-recruitment/zte/46903#/jobs",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="中兴校招（MokaHR）",
+    ),
+    "alibaba": SiteConfig(
+        name="alibaba",
+        base_url="https://talent.alibaba.com",
+        category_url="https://talent.alibaba.com/campus",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="阿里巴巴校招",
+    ),
+    "baidu": SiteConfig(
+        name="baidu",
+        base_url="https://talent.baidu.com",
+        category_url="https://talent.baidu.com/jobs/list",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="百度校招",
+    ),
+    "meituan": SiteConfig(
+        name="meituan",
+        base_url="https://campus.meituan.com",
+        category_url="https://campus.meituan.com/jobs",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="美团校招",
+    ),
+    "xiaomi": SiteConfig(
+        name="xiaomi",
+        base_url="https://hr.xiaomi.com",
+        category_url="https://hr.xiaomi.com/campus",
+        max_applications_per_cycle=3,
+        cycle_days=30,
+        pagination_type="scroll",
+        max_pages=50,
+        description="小米校招",
+    ),
+}
 
-    out: List[Dict] = []
-    for s in (data.get("sites") or []):
-        if not isinstance(s, dict):
-            continue
-        url = (s.get("url") or "").strip()
-        name = (s.get("name") or url).strip()
-        if url.startswith("http"):
-            out.append({"name": name, "url": url, "kind": s.get("kind", "portal")})
-    return out
+
+def get_site_config(name: str) -> Optional[SiteConfig]:
+    """获取站点配置。"""
+    return _SITES.get(name.lower())
 
 
-def resolve_sites(path: str = None) -> List[Dict]:
+def list_sites() -> List[str]:
+    """列出所有支持的站点。"""
+    return list(_SITES.keys())
+
+
+def register_site(config: SiteConfig) -> None:
+    """注册自定义站点配置。
+
+    只需提供 name, base_url, category_url，岗位发现使用通用策略。
+    示例：
+        register_site(SiteConfig(
+            name="mycompany",
+            base_url="https://jobs.mycompany.com",
+            category_url="https://jobs.mycompany.com/campus",
+        ))
     """
-    最终找站点列表：内置三站 + 用户文件里的站（保序、按 host 去重）。
-    """
-    merged: List[Dict] = []
-    seen = set()
-    for s in BUILTIN_JOB_SITES + load_extra_sites(path):
-        key = s["url"].rstrip("/").lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(s)
-    return merged
+    _SITES[config.name.lower()] = config

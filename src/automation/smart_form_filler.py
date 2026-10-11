@@ -25,6 +25,7 @@ project_root = str(Path(__file__).resolve().parents[2])
 sys.path.insert(0, project_root)
 
 from src.utils.llm_client import get_llm_client
+from src.search.hitl import BlockHandler
 from src.models.schemas import (
     DynamicUserPersona,
     FormSchema,
@@ -164,6 +165,7 @@ class SmartFormFiller:
         self.viewport = viewport
         self.timeout = timeout
         self.browser = None
+        self.block_handler = BlockHandler(interactive=True, headless=headless)
         self.llm_client = get_llm_client()
         self.context_cache = {}
         self.storage_dir = Path(project_root) / "storage"
@@ -565,21 +567,15 @@ class SmartFormFiller:
             是否登录成功
         """
         logger.info("等待用户手动登录...")
+        ok = await self.block_handler.handle(
+            "login", context.url,
+            detail="请在浏览器中完成登录。完成后回车继续；输入 skip 跳过此职位。",
+        )
+        if not ok:
+            return False
 
-        # 打印登录提示
-        print(f"\n{'='*60}")
-        print("🔐 需要登录才能继续")
-        print(f"{'='*60}")
-        print(f"网站: {context.url}")
-        print("请在浏览器中手动完成登录")
-        print("登录完成后按 Enter 继续...")
-        print(f"{'='*60}")
-
-        # 等待用户输入
-        input()
-
-        # 检查登录状态
-        is_logged_in = not await self.check_login_status(context.page, context.url)
+        # 检查登录状态（不再 goto 重载，避免打断用户刚完成的登录）
+        is_logged_in = not await self._looks_like_login_wall(context.page)
 
         if is_logged_in:
             # 保存Cookie
@@ -1049,12 +1045,30 @@ class SmartFormFiller:
 
             if not instructions:
                 logger.error("无法生成填写指令")
-                return {
-                    "success": False,
-                    "error": "无法生成填写指令",
-                    "url": url,
-                    "completed_steps": []
-                }
+                ok = await self.block_handler.handle(
+                    "unknown", url,
+                    detail="Agent 无法识别或填写该申请表。你可在浏览器里手动填好后回车，"
+                           "或输入 skip 跳过此职位。",
+                    force=True,
+                )
+                if not ok:
+                    await self.stop_browser()
+                    return {
+                        "success": False,
+                        "error": "无法生成填写指令",
+                        "url": url,
+                        "completed_steps": []
+                    }
+                form_schema = await self.analyze_form_structure(page)
+                instructions = await self.generate_filling_instructions(form_schema, persona)
+                if not instructions:
+                    await self.stop_browser()
+                    return {
+                        "success": False,
+                        "error": "无法生成填写指令",
+                        "url": url,
+                        "completed_steps": []
+                    }
 
             # 执行填写
             logger.info("开始执行填写...")

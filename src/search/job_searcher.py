@@ -69,8 +69,8 @@ class JobSearcher:
         max_card_clicks = int(search_cfg.get("max_card_clicks", 16))
         max_api_objects = int(search_cfg.get("max_api_objects", 200))
         jd_concurrency = int(search_cfg.get("jd_concurrency", 3))
-        # 聚合门户是否改用站内搜索 URL（Boss/猎聘/前程无忧；公司官网不受影响）
-        portal_keyword_search = bool(search_cfg.get("portal_keyword_search", True))
+        # 默认关闭站内关键词搜索：按官网类别 + 列表遍历找岗
+        portal_keyword_search = bool(search_cfg.get("portal_keyword_search", False))
 
         self.pipeline = SearchPipeline(
             self.tavily_api_key,
@@ -181,9 +181,14 @@ class JobSearcher:
         # 模糊方向 -> 岗位大类/标题词族（纯规则、零 API 成本），
         # 下传给浏览器阶段：只看职位标题就能判断与目标方向是否相关
         direction = infer_direction(primary_role, skills)
+        # 相关性词集 = 方向词族（已并集）∪ 岗位名变体 ∪ 角色本身：
+        # 这样「Web前端开发」「React开发」这类与目标同义的岗位名也判相关，不会被丢掉
+        title_kws = list(dict.fromkeys(
+            list(direction["title_keywords"]) + list(role_variants) + [primary_role]
+        ))
         logger.info(
             f"方向推断: 「{primary_role}」-> {direction['category']}/{direction['label']}"
-            f"（标题词族 {len(direction['title_keywords'])} 个）"
+            f"（标题相关词集 {len(title_kws)} 个 = 方向词族 + 岗位变体）"
         )
 
         target_info = TargetInstructionSchema(
@@ -194,7 +199,7 @@ class JobSearcher:
             role_variants=role_variants,
             direction_family=direction["key"],
             direction_category=direction["category"],
-            title_keywords=direction["title_keywords"],
+            title_keywords=title_kws,
             recruit_type=self.recruit_type,
         )
 

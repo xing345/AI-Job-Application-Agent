@@ -103,9 +103,14 @@ class BlockHandler:
         return self.interactive and not self.headless
 
     # ------------------------------------------------------------------ #
-    async def handle(self, kind: str, url: str, detail: str = "") -> bool:
+    async def handle(self, kind: str, url: str, detail: str = "",
+                     force: bool = False) -> bool:
         """
         处理一次阻断。
+
+        Args:
+            force: True 时忽略「同域已处理过」记录，再次停下询问。
+                   用于用户说处理完了但页面仍是登录墙、或列表仍抽不出岗位。
 
         Returns:
             True  -> 用户已处理完，从断点继续（重试 / 继续抓下一页）
@@ -124,7 +129,10 @@ class BlockHandler:
         # 同域只打断一次：用户登录一次通常整站通行。
         # 注意：这只在「同一个浏览器实例」内成立——浏览器被重建（用户关掉窗口、
         # 页面崩溃后自动重建）时登录态已经丢了，调用方必须调 reset() 让这里重新询问。
-        if domain in self._seen_domains:
+        if domain in self._seen_domains and not force:
+            # 暂停期间，同域第二个撞墙任务也必须先等用户确认再继续，
+            # 否则会出现：用户还在解验证码，另一个标签页照样 goto/重载页面（页面不停闪）。
+            await self.wait_until_resumed()
             logger.info(f"[{info.label}] {url}（该站此前已人工处理，按已通行继续）")
             return True
         self._seen_domains.add(domain)
