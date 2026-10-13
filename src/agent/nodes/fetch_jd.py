@@ -18,6 +18,7 @@ from src.browser.manager import get_browser
 from src.browser.navigator import wait_for_load
 from src.models.job import JobDetail, JobPosting
 from src.search.adapters import get_adapter
+from src.storage import state_db
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,26 @@ async def _extract_meta(page: Page) -> dict:
     return meta
 
 
+def _detail_from_cache(cached: dict) -> JobDetail:
+    """从数据库缓存重建 JobDetail（跳过抓取）。"""
+    posting = JobPosting(
+        title=cached.get("job_title") or "",
+        company=cached.get("company") or "",
+        location=cached.get("location") or "",
+        detail_url=cached["job_url"],
+        category_path=cached.get("category_path") or "",
+        site_name=cached.get("site_name") or "",
+    )
+    return JobDetail(
+        posting=posting,
+        full_jd=cached.get("full_jd") or "",
+        responsibilities=cached.get("responsibilities") or "",
+        requirements=cached.get("requirements") or "",
+        location=cached.get("location") or "",
+        apply_url=cached["job_url"],
+    )
+
+
 async def fetch_single_jd(page: Page, url: str, site_name: str = "", job_title: str = "") -> Optional[JobDetail]:
     """抓取单个岗位的完整 JD。
 
@@ -292,11 +313,23 @@ async def run(state: AgentState) -> AgentState:
     logger.info("Fetching %d job details...", len(urls_to_fetch))
 
     details: list[JobDetail] = []
+    from_cache = 0
     for url, site_name, job_title in urls_to_fetch:
+        # 1) 优先用缓存的 JD（抓过且有效），跳过抓取
+        cached = await state_db.get_cached_jd(url)
+        if cached and cached.get("full_jd"):
+            details.append(_detail_from_cache(cached))
+            from_cache += 1
+            continue
+
+        # 2) 无缓存，实际抓取
         try:
             detail = await fetch_single_jd(page, url, site_name, job_title)
             if detail:
                 details.append(detail)
+                # 抓取成功后写入缓存，供后续重跑复用
+                await state_db.save_jd_detail(
+                    url, detail.full_jd, detail.responsibilities, detail.requirements)
             else:
                 state.add_error("fetch_jd", f"JD 抓取失败: {url}")
         except Exception as e:
@@ -304,5 +337,8 @@ async def run(state: AgentState) -> AgentState:
             logger.exception("fetch_single_jd error: %s", url)
 
     state.job_details = details
-    logger.info("JD fetch complete: %d/%d succeeded", len(details), len(urls_to_fetch))
+    logger.info("JD fetch complete: %d/%d succeeded (%d from cache, %d newly fetched)",
+                len(details), len(urls_to_fetch), from_cache, len(details) - from_cache)
+    if from_cache:
+        print(f"[缓存复用] {from_cache}/{len(urls_to_fetch)} 个岗位 JD 从本地缓存加载，无需重新抓取")
     return state

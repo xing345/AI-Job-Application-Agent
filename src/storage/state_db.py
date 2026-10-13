@@ -17,7 +17,7 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 
 _DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "agent_state.db")
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _initialized = False
 
@@ -107,6 +107,29 @@ async def init_db() -> None:
                 (datetime.now().isoformat(),),
             )
             logger.info("DB migrated to v2")
+
+        # 迁移到 v3：jobs 表增加 JD 全文与匹配结果缓存字段（分阶段缓存，避免重跑重复抓取/匹配）
+        if current_version < 3:
+            cursor = await db.execute("PRAGMA table_info(jobs)")
+            existing_cols = {row[1] for row in await cursor.fetchall()}
+            v3_columns = [
+                ("full_jd", "TEXT"),
+                ("responsibilities", "TEXT"),
+                ("requirements", "TEXT"),
+                ("jd_hash", "TEXT"),
+                ("jd_fetched_at", "TEXT"),
+                ("match_json", "TEXT"),
+                ("matched_at", "TEXT"),
+            ]
+            for col_name, col_type in v3_columns:
+                if col_name not in existing_cols:
+                    await db.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_type}")
+
+            await db.execute(
+                "INSERT INTO schema_version (version, applied_at) VALUES (3, ?)",
+                (datetime.now().isoformat(),),
+            )
+            logger.info("DB migrated to v3")
 
         await db.commit()
 
@@ -256,3 +279,90 @@ async def load_latest_state(session_id: str) -> Optional[Dict[str, Any]]:
         if row:
             return json.loads(row[0])
         return None
+
+
+# ============================================================
+# 分阶段缓存：JD 全文 + 匹配结果（避免重跑重复抓取/匹配）
+# ============================================================
+
+def _compute_jd_hash(full_jd: str) -> str:
+    """计算 JD 全文的 hash，用于判断 JD 是否变化（匹配缓存是否仍有效）。"""
+    import hashlib
+    return hashlib.md5((full_jd or "").encode("utf-8")).hexdigest()
+
+
+async def save_jd_detail(
+    job_url: str,
+    full_jd: str,
+    responsibilities: str = "",
+    requirements: str = "",
+) -> None:
+    """缓存某岗位抓取到的 JD 全文。"""
+    await _ensure_init()
+    now = datetime.now().isoformat()
+    jd_hash = _compute_jd_hash(full_jd)
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await db.execute(
+            """UPDATE jobs
+               SET full_jd=?, responsibilities=?, requirements=?, jd_hash=?, jd_fetched_at=?
+               WHERE job_url=?""",
+            (full_jd, responsibilities, requirements, jd_hash, now, job_url),
+        )
+        await db.commit()
+
+
+async def get_cached_jd(job_url: str) -> Optional[Dict[str, Any]]:
+    """获取缓存的 JD；无有效缓存返回 None。"""
+    await _ensure_init()
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT job_url, job_title, company, site_name, location, category_path,
+                      full_jd, responsibilities, requirements, jd_hash, jd_fetched_at
+               FROM jobs WHERE job_url=?""",
+            (job_url,),
+        )
+        row = await cursor.fetchone()
+        if row and row["full_jd"]:
+            return dict(row)
+        return None
+
+
+async def save_match(job_url: str, match: Dict[str, Any], jd_hash: str) -> None:
+    """缓存某岗位的 LLM 匹配结果，关联当前 JD hash。"""
+    await _ensure_init()
+    now = datetime.now().isoformat()
+    async with aiosqlite.connect(_DB_PATH) as db:
+        await db.execute(
+            "UPDATE jobs SET match_json=?, matched_at=?, jd_hash=? WHERE job_url=?",
+            (json.dumps(match, ensure_ascii=False), now, jd_hash, job_url),
+        )
+        await db.commit()
+
+
+async def get_cached_match(job_url: str, jd_hash: str) -> Optional[Dict[str, Any]]:
+    """获取缓存的匹配结果；JD hash 不一致（JD 已变）或无缓存返回 None。"""
+    await _ensure_init()
+    async with aiosqlite.connect(_DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT match_json, jd_hash FROM jobs WHERE job_url=?",
+            (job_url,),
+        )
+        row = await cursor.fetchone()
+        if row and row[0] and row[1] == jd_hash:
+            return json.loads(row[0])
+        return None
+
+
+async def get_site_job_postings(site_name: str) -> List[Dict[str, Any]]:
+    """从库中加载某站点所有已发现岗位（用于跳过岗位发现，直接复用）。"""
+    await _ensure_init()
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT job_url, job_title, company, site_name, location, category_path
+               FROM jobs WHERE site_name=? ORDER BY id""",
+            (site_name,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]

@@ -16,6 +16,7 @@ from src.agent.state import AgentState
 from src.llm import client as llm
 from src.llm.prompts import job_match_prompt
 from src.models.match import MatchResult
+from src.storage import state_db
 
 logger = logging.getLogger(__name__)
 
@@ -90,17 +91,36 @@ async def run(state: AgentState) -> AgentState:
     logger.info("Matching %d jobs with resume (len=%d)...", len(state.job_details), len(resume_text))
 
     results: list[MatchResult] = []
+    from_cache = 0
     for detail in state.job_details:
         jd_text = detail.jd_for_match()
         job_title = detail.posting.title
         job_url = detail.posting.detail_url
+        full_jd = detail.full_jd or jd_text
+        jd_hash = state_db._compute_jd_hash(full_jd)
 
         try:
+            # 1) 优先用缓存的匹配结果（JD hash 一致才有效）
+            cached_match = await state_db.get_cached_match(job_url, jd_hash)
+            if cached_match is not None:
+                result = MatchResult(**cached_match)
+                result.job_url = job_url
+                result.job_title = job_title
+                result.company = detail.posting.company
+                results.append(result)
+                from_cache += 1
+                continue
+
+            # 2) 无缓存，实际 LLM 匹配
             result = await match_one(resume_text, job_title, jd_text, state.run_id)
             result.job_url = job_url
             result.job_title = job_title
             result.company = detail.posting.company
             results.append(result)
+
+            # 匹配成功后写入缓存（失效JD的低分结果也缓存，避免重复判定）
+            await state_db.save_match(job_url, result.model_dump(), jd_hash)
+
             logger.info("Matched: %s | score=%d | direction=%s", job_title, result.score, result.direction_match)
         except Exception as e:
             state.add_error("match_jobs", f"{job_title} ({job_url}): {e}")
@@ -115,8 +135,11 @@ async def run(state: AgentState) -> AgentState:
     # 保存匹配报告
     _save_report(results)
 
-    logger.info("Match complete: %d/%d succeeded, top score=%d", len(results), len(state.job_details),
+    logger.info("Match complete: %d/%d succeeded (%d from cache), top score=%d",
+                len(results), len(state.job_details), from_cache,
                 results[0].score if results else 0)
+    if from_cache:
+        print(f"[缓存复用] {from_cache}/{len(results)} 个岗位匹配结果从本地缓存加载，无需重新调用大模型")
     return state
 
 
