@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobPosting(BaseModel):
     """列表页提取的岗位摘要信息。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     title: str
     company: str = ""
@@ -22,6 +24,8 @@ class JobPosting(BaseModel):
 
 class JobDetail(BaseModel):
     """详情页提取的完整岗位信息。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     posting: JobPosting
     full_jd: str = ""  # 完整 JD 原文，不截断

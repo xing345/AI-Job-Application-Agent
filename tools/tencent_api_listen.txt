@@ -1,0 +1,82 @@
+﻿尝试点击第2页...
+
+=== 捕获到 9 个API响应 ===
+
+--- API 1 ---
+URL: https://join.qq.com/post.html
+Method: GET, Status: 200
+Body: <!DOCTYPE html><html><head><meta charset=utf-8><meta http-equiv=X-UA-Compatible content="IE=edge"><title>岗位投递 | 腾讯校招</title><link rel=stylesheet href=/static2/newstatic/font/font.css><link rel=stylesheet href=/static2/newstatic/index.css><link rel=stylesheet href=https://cdn.multilingualres.hr.tencent.com/joinqq/static2/newstatic/css/global.css><link rel=stylesheet href=https://cdn.multilingualres
+
+--- API 2 ---
+URL: https://cdn.multilingualres.hr.tencent.com/joinqq/static2/newstatic/css/pages/post_list/post_list.css
+Method: GET, Status: 200
+Body: .post .banner {
+
+  background: linear-gradient(180.25deg, rgba(0, 0, 0, 0) 42%, rgba(0, 0, 0, 0.26) 100%);
+
+}
+
+.post .banner .banner_content .swiper-container .swiper-wrapper .swiper-slide {
+
+  position: relative;
+
+  width: 100%;
+
+  text-align: center;
+
+  font-size: 48px;
+
+  padding-bottom: 19.72%;
+
+  background-size: cover;
+
+  background-position: center;
+
+}
+
+.post .banner .banner_content .swiper
+
+--- API 3 ---
+URL: https://cdn.multilingualres.hr.tencent.com/joinqq/static2/js/p_zh-cn_post.build.js
+Method: GET, Status: 200
+Body: webpackJsonp([11],{
+
+/***/ "+GOQ":
+/***/ (function(module, exports, __webpack_require__) {
+
+exports = module.exports = __webpack_require__("FZ+f")(false);
+// imports
+
+
+// module
+exports.push([module.i, ".t-row{font:var(--td-font-body-medium);color:var(--td-text-color-primary);box-sizing:border-box;margin:0;padding:0;list-style:none;display:flex;flex-flow:row wrap}.t-row--start{justify-content:flex
+
+--- API 4 ---
+URL: https://join.qq.com/api/v1/position/getProjectMapping?timestamp=1791900903615
+Method: GET, Status: 200
+Body: {"message":"","status":0,"data":[{"id":1,"recruitType":1,"recruitTypeName":"应届毕业生","ordering":1,"hasShowSub":1,"status":1,"recruitRangDesc":"毕业时间：2025年1月1日 - 2026年12月31日","subProjectList":[{"mappingId":1,"recruitType":1,"projectId":"1","projectName":"2027校园招聘","recruitYear":"2027","ordering":1,"status":1,"recruitRangDesc":"毕业时间：2026年1月1日-2027年12月31日"}]},{"id":2,"recruitType":2,"recruitTypeName":"实
+
+--- API 5 ---
+URL: https://join.qq.com/api/v1/position/getPositionWorkCities?timestamp=1791900903683
+Method: GET, Status: 200
+Body: {"message":"","status":0,"data":{"1":[{"did":6359,"name":"深圳","code":"1","orderNumber":1,"itemCode":"1","subDictionary":null},{"did":6361,"name":"北京","code":"2","orderNumber":2,"itemCode":"1","subDictionary":null},{"did":6363,"name":"广州","code":"5","orderNumber":3,"itemCode":"1","subDictionary":null},{"did":6365,"name":"上海","code":"3","orderNumber":4,"itemCode":"1","subDictionary":null},{"did":636
+
+--- API 6 ---
+URL: https://join.qq.com/api/v1/position/getPositionFamily?timestamp=1791900903765
+Method: GET, Status: 200
+Body: {"message":"","status":0,"data":{"2":[{"id":75,"fid":2,"oldid":0,"title":"软件开发类","desc":"","request":"","workcity":"1","recruitcity":"1","ordering":1,"status":"1","selectedWorks":"0","withFile":"0","intentionUnselect":null,"introduction":"0","fileUrl":"","coverUrl":"","graduateBonus":"","internBonus":"","isQingyun":0,"topicDetail":null,"topicRequirement":null,"showOnQingyunSite":0,"businessName":n
+
+--- API 7 ---
+URL: https://join.qq.com/api/v1/position/getRecruitCity?timestamp=1791900903880
+Method: GET, Status: 200
+Body: {"message":"","status":0,"data":[{"did":6517,"name":"成都","code":"1","orderNumber":1,"itemCode":"","subDictionary":null},{"did":6521,"name":"广州","code":"3","orderNumber":3,"itemCode":"","subDictionary":null},{"did":6525,"name":"上海","code":"5","orderNumber":5,"itemCode":"","subDictionary":null},{"did":6531,"name":"北京","code":"11","orderNumber":11,"itemCode":"","subDictionary":null},{"did":6535,"name
+
+--- API 8 ---
+URL: https://join.qq.com/api/v1/position/searchPosition?timestamp=1791900903977
+Method: POST, Status: 200
+Body: {"message":"","status":0,"data":{"positionList":[{"id":22444,"position":783,"positionTitle":"AI全栈工程师","positionFamily":2,"projectId":1,"bgs":"CDG CSIG IEG PCG TEG WXG ","workCities":"深圳总部 北京 上海 广州 成都 杭州 ","positionUrl":null,"positionSource":"oa","projectName":"应届毕业生","recruitLabelName":"应届毕业生","groupTag":null,"postId":"1282707398326592512"},{"id":22441,"position":784,"positionTitle":"Agent开发工程师","
+
+--- API 9 ---
+URL: https://join.qq.com/api/v1/position/searchPosition?timestamp=1791900911583
+Method: POST, Status: 200
+Body: {"message":"","status":0,"data":{"positionList":[{"id":22418,"position":141,"positionTitle":"游戏发行/运营培训生","positionFamily":3,"projectId":1,"bgs":"IEG PCG ","workCities":"深圳总部 上海 ","positionUrl":null,"positionSource":"oa","projectName":"应届毕业生","recruitLabelName":"应届毕业生","groupTag":null,"postId":"1282032033786619905"},{"id":22419,"position":107,"positionTitle":"游戏客户端开发","positionFamily":2,"projectId"

@@ -1,0 +1,56 @@
+﻿=== 米哈游API适配器验证 ===
+
+=== 验证结果 ===
+发现岗位数: 20
+
+[1] Golang后端开发工程师
+    地点: 上海
+    分类: 程序&技术类 / 全职 / 2027届秋招
+    URL: https://jobs.mihoyo.com/#/campus/position/9630
+
+[2] SDK客户端开发工程师
+    地点: 上海
+    分类: 程序&技术类 / 全职 / 2027届秋招
+    URL: https://jobs.mihoyo.com/#/campus/position/9631
+
+[3] AI人文训练实习生（英语方向）
+    地点: 上海
+    分类: 运营类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/9629
+
+[4] 商务数据采购实习生
+    地点: 上海
+    分类: 市场&商务类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/9628
+
+[5] 国际化市场品牌（韩）
+    地点: 上海
+    分类: 国际化类 / 全职 / 2027届秋招
+    URL: https://jobs.mihoyo.com/#/campus/position/9079
+
+[6] Agent 策略运营实习生
+    地点: 上海
+    分类: 运营类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/9625
+
+[7] 综合采购实习生
+    地点: 上海
+    分类: 综合类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/9623
+
+[8] 用户研究工具开发实习生（AI 应用方向）
+    地点: 上海
+    分类: 程序&技术类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/9615
+
+[9] 游戏特效实习生（Unity/Unreal）
+    地点: 上海
+    分类: 美术&表现类 / 实习 / 实习生专项
+    URL: https://jobs.mihoyo.com/#/campus/position/7895
+
+[10] 游戏特效师（Unity/Unreal）
+    地点: 上海
+    分类: 美术&表现类 / 全职 / 2027届秋招
+    URL: https://jobs.mihoyo.com/#/campus/position/9129
+
+验证完成

@@ -13,8 +13,6 @@ import logging
 import os
 import sys
 import uuid
-from datetime import datetime
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -24,27 +22,7 @@ from src.agent.graph import build_graph
 from src.agent.state import AgentState
 from src.browser.manager import close_browser, get_browser
 from src.storage import state_db
-
-# 日志配置
-_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-_LOG_DIR.mkdir(exist_ok=True)
-
-
-def setup_logging(verbose: bool = False) -> None:
-    level = logging.DEBUG if verbose else logging.INFO
-    log_file = _LOG_DIR / f"agent.{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
-
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-    logging.getLogger("playwright").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+from src.utils.logging_config import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,7 +40,8 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
-    setup_logging(args.verbose)
+    session_id = args.resume_run or str(uuid.uuid4())[:8]
+    setup_logging(verbose=args.verbose, run_id=session_id)
     logger = logging.getLogger(__name__)
 
     if args.list_sites:
@@ -72,9 +51,7 @@ async def main() -> None:
             print(f"  - {s}")
         return
 
-    session_id = args.resume_run or str(uuid.uuid4())[:8]
     logger.info("=== 自动求职 Agent 启动 | session=%s ===", session_id)
-
     # 处理 --discover-url：动态注册任意招聘网站
     site_name = args.site
     if args.discover_url:
@@ -96,6 +73,7 @@ async def main() -> None:
             logger.info("动态注册站点: %s -> %s", site_name, args.discover_url)
 
     state = AgentState(
+        run_id=session_id,
         site_name=site_name,
         job_urls=args.job_url,
         resume_path=args.resume,
@@ -103,7 +81,7 @@ async def main() -> None:
     )
 
     if args.resume_run:
-        saved = state_db.load_latest_state(args.resume_run)
+        saved = await state_db.load_latest_state(args.resume_run)
         if saved:
             state = AgentState.model_validate(saved)
             logger.info("恢复断点状态: %s", args.resume_run)
@@ -116,6 +94,9 @@ async def main() -> None:
         sys.exit(1)
 
     try:
+        await state_db.init_db()
+        logger.info("Database ready")
+
         await get_browser()
         logger.info("Browser ready")
 
@@ -128,7 +109,7 @@ async def main() -> None:
         else:
             final_state = result
 
-        state_db.save_state(session_id, final_state.model_dump(mode="json"))
+        await state_db.save_state(session_id, final_state.model_dump(mode="json"))
 
         print("\n" + "=" * 60)
         print("=== 运行结束 ===")
@@ -147,11 +128,11 @@ async def main() -> None:
 
     except KeyboardInterrupt:
         logger.info("用户中断")
-        state_db.save_state(session_id, state.model_dump(mode="json"))
+        await state_db.save_state(session_id, state.model_dump(mode="json"))
         print(f"\n已保存状态，可用 --resume-run {session_id} 恢复")
     except Exception as e:
         logger.exception("Agent 运行失败: %s", e)
-        state_db.save_state(session_id, state.model_dump(mode="json"))
+        await state_db.save_state(session_id, state.model_dump(mode="json"))
         print(f"\n运行失败: {e}")
         print(f"已保存状态，可用 --resume-run {session_id} 恢复")
     finally:

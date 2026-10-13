@@ -1,0 +1,50 @@
+﻿=== '工作职责'锚点向上容器链 ===
+  <DIV> x=50 w=940 class='ant-flex css-96wdb2 ant-flex-align-center' len=4
+  <DIV> x=50 w=940 class='blockTitleWrapper___Sv6Uk' len=4
+  <DIV> x=50 w=940 class='describeBlock___ZmvDZ' len=421
+  <DIV> x=0 w=1040 class='detailContainer___gznmE' len=1166
+  <DIV> x=0 w=1440 class='contentStyle___lLy9p' len=1624
+  <DIV> x=0 w=1440 class='content-wrapper' len=1624
+  <DIV> x=0 w=1440 class='content-container' len=1624
+
+=== [class*='jobTitle'] 元素 ===
+  x=50 class='jobTitleWrapper___opPSq' text='基础研究-游戏AI研发工程师（Agent方向）全职'
+  x=50 class='jobTitle___t1MRR titleLineH___CCPw2' text='基础研究-游戏AI研发工程师（Agent方向）'
+  x=588 class='titleLineH___CCPw2' text='全职'
+
+=== 主内容容器候选 ===
+  sel='[class*='content']' x=0 len=1624 sidebar=True class='content-container'
+  sel='[class*='content']' x=0 len=1624 sidebar=True class='content-wrapper'
+  sel='[class*='content']' x=0 len=1624 sidebar=True class='contentStyle___lLy9p'
+  sel='[class*='content']' x=50 len=2 sidebar=False class='contentText___YouEn'
+  sel='[class*='content']' x=104 len=6 sidebar=False class='contentText___YouEn'
+  sel='[class*='content']' x=210 len=24 sidebar=False class='contentText___YouEn'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1133 len=2 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1177 len=6 sidebar=False class='contentText___Ls2fb'
+  sel='[class*='content']' x=1249 len=24 sidebar=False class='contentText___Ls2fb'

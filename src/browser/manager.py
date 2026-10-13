@@ -19,6 +19,25 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROFILE_DIR = str(Path(__file__).resolve().parent.parent.parent / "data" / "browser_profile")
 
 
+def _resolve_profile_dir() -> str:
+    """解析浏览器 profile 目录。
+
+    优先级：
+    1. 环境变量 BROWSER_PROFILE_DIR（多实例并发时，每个终端设不同路径）
+    2. 环境变量 BROWSER_PROFILE_SUFFIX（自动生成 data/browser_profile_{suffix}）
+    3. 默认 data/browser_profile
+    """
+    explicit = os.environ.get("BROWSER_PROFILE_DIR", "").strip()
+    if explicit:
+        return explicit
+
+    suffix = os.environ.get("BROWSER_PROFILE_SUFFIX", "").strip()
+    if suffix:
+        return str(Path(__file__).resolve().parent.parent.parent / "data" / f"browser_profile_{suffix}")
+
+    return _DEFAULT_PROFILE_DIR
+
+
 class BrowserManager:
     """管理 Playwright 浏览器生命周期。"""
 
@@ -109,7 +128,8 @@ _manager: Optional[BrowserManager] = None
 async def get_browser() -> BrowserManager:
     global _manager
     if _manager is None:
-        _manager = BrowserManager()
+        profile_dir = _resolve_profile_dir()
+        _manager = BrowserManager(user_data_dir=profile_dir)
         await _manager.start()
     return _manager
 

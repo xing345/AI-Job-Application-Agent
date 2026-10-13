@@ -54,8 +54,14 @@ class BlockHandler:
     ]
     CAPTCHA_TEXT_KEYWORDS = ["验证码", "图形验证", "滑块验证", "安全验证", "人机验证", "captcha"]
 
-    # 403 / 拦截页
-    BLOCK_TEXT_KEYWORDS = ["403", "访问被拒绝", "forbidden", "请求过于频繁", "操作频繁"]
+    # 403 / 拦截页（注意："403"单独作为关键词太容易误报，
+    # 因为职位编号、页面元素等可能包含数字403，必须用完整短语匹配）
+    BLOCK_TEXT_KEYWORDS = [
+        "403 Forbidden", "403 forbidden", "HTTP 403", "http 403",
+        "错误代码403", "错误代码：403", "403错误", "403 错误",
+        "访问被拒绝", "访问拒绝", "forbidden", "Forbidden",
+        "请求过于频繁", "操作频繁", "访问频率受限", "频率限制",
+    ]
 
     def __init__(self, interactive: bool = True):
         self.interactive = interactive

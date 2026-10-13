@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.models.application import ApplicationStatus, RunStatus
 from src.models.job import JobDetail, JobPosting
 from src.models.match import FillField, MatchResult
 from src.models.profile import Resume, UserProfile
@@ -12,6 +13,13 @@ from src.models.profile import Resume, UserProfile
 
 class AgentState(BaseModel):
     """Agent 全流程共享状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # 运行标识与状态
+    run_id: str = ""
+    status: RunStatus = RunStatus.PENDING
+    current_application_status: ApplicationStatus = ApplicationStatus.PENDING
 
     # 输入
     profile: Optional[UserProfile] = None

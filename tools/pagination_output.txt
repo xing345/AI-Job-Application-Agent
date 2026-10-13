@@ -1,0 +1,130 @@
+﻿.venv\Scripts\python.exe : D:\x\ai agent\tools\diagnose_pagination.py:116: SyntaxWarning: invalid escape sequence '\d'
+At line:1 char:21
++ ... \ai agent"; .venv\Scripts\python.exe tools\diagnose_pagination.py > t ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\x\ai agent\t...e sequence '\d':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  if (/^\d+$/.test(text) && text.length <= 3) {
+=== 字节跳动分页机制诊断 ===
+
+[1] 滚动到底部...
+
+[2] 页面底部的按钮/链接:
+  <DIV> '1
+2
+3
+4
+5
+747' class='pager__3IM2I' [可见]
+  <UL> '1
+2
+3
+4
+5
+747' class='atsx-pagination mini' [可见]
+  <LI> '1' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '1' class='' [可见]
+  <LI> '2' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '2' class='' [可见]
+  <LI> '3' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '3' class='' [可见]
+  <LI> '4' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '4' class='' [可见]
+  <LI> '5' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '5' class='' [可见]
+  <LI> '747' class='atsx-pagination-item atsx-pagination-ite' [可见]
+  <A> '747' class='big' [可见]
+  <BUTTON> '候选人反馈平台' class='anyweb-comp-btn button primary' [可见]
+  <BUTTON> '官网使用体验反馈' class='anyweb-comp-btn button primary' [可见]
+  <BUTTON> '字节跳动' class='anyweb-comp-btn button secondary' [可见]
+  <BUTTON> '社会招聘' class='anyweb-comp-btn button secondary' [可见]
+  <BUTTON> '全球招聘' class='anyweb-comp-btn button secondary' [可见]
+  <BUTTON> '字节跳动 Seed 团队' class='anyweb-comp-btn button secondary' [可见]
+  <BUTTON> 'AI 助手' class='campus-ai-assistant__fab' [可见]
+
+[3] 分页相关元素:
+  [class*="pagination"] -> <DIV> class='swiper-pagination swiper-pagination-clickable swip'
+    text: '', children: 8
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet swiper-pagination-bullet-'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <SPAN> class='swiper-pagination-bullet'
+    text: '', children: 0
+  [class*="pagination"] -> <UL> class='atsx-pagination mini'
+    text: '1
+2
+3
+4
+5
+747', children: 9
+  [class*="pagination"] -> <LI> class='atsx-pagination-disabled atsx-pagination-prev'
+    text: '', children: 1
+  [class*="pagination"] -> <A> class='atsx-pagination-item-link'
+    text: '', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-1 atsx-p'
+    text: '1', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-2'
+    text: '2', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-3'
+    text: '3', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-4'
+    text: '4', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-5 atsx-p'
+    text: '5', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-jump-next atsx-pagination-jump-nex'
+    text: '', children: 1
+  [class*="pagination"] -> <A> class='atsx-pagination-item-link'
+    text: '', children: 1
+  [class*="pagination"] -> <DIV> class='atsx-pagination-item-container'
+    text: '', children: 1
+  [class*="pagination"] -> <SPAN> class='atsx-pagination-item-ellipsis'
+    text: '', children: 1
+  [class*="pagination"] -> <LI> class='atsx-pagination-item atsx-pagination-item-747'
+    text: '747', children: 1
+  [class*="pagination"] -> <LI> class=' atsx-pagination-next'
+    text: '', children: 1
+  [class*="pagination"] -> <A> class='atsx-pagination-item-link'
+    text: '', children: 1
+  [class*="pager"] -> <DIV> class='pager__3IM2I'
+    text: '1
+2
+3
+4
+5
+747', children: 1
+  div[class*="page"] -> <DIV> class='pager__3IM2I'
+    text: '1
+2
+3
+4
+5
+747', children: 1
+
+[4] URL 分析:
+  当前 URL: https://jobs.bytedance.com/campus/position
+  页面标题: 字节跳动校园招聘
+
+[5] 页码文本搜索:
+  未找到页码文本
+
+[6] 数字导航按钮:
+  <A> '1' class=''
+  <A> '2' class=''
+  <A> '3' class=''
+  <A> '4' class=''
+  <A> '5' class=''
+  <A> '747' class='big'
+
+诊断完成

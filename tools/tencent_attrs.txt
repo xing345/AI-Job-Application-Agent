@@ -1,0 +1,45 @@
+﻿=== 卡片属性 ===
+  data-v-0c132cb0 = 
+  class = post_box
+
+=== 内部HTML ===
+<div data-v-0c132cb0="" class="post_title">AI全栈工程师</div> <div data-v-0c132cb0="" class="post_tag_box"><div data-v-0c132cb0="" class="post_tag">技术</div> <div data-v-0c132cb0="" class="post_tag"><span data-v-0c132cb0="">｜</span> 应届毕业生 <!----> <!----></div> <div data-v-0c132cb0="" class="post_tag"><span data-v-0c132cb0="">｜</span>CDG CSIG IEG PCG TEG WXG </div></div> <div data-v-0c132cb0="" class="site_box"><div data-v-0c132cb0="" class="site_title">工作地点：</div> <div data-v-0c132cb0="" class="site">
+
+                      深圳总部 北京 上海 广州 成都 杭州 
+
+                    </div></div>
+
+=== 内部元素 ===
+  <DIV> class='post_title' text=AI全栈工程师
+    data-v-0c132cb0=
+    class=post_title
+  <DIV> class='post_tag_box' text=技术 ｜ 应届毕业生   ｜CDG CSIG IEG PCG TEG WXG
+    data-v-0c132cb0=
+    class=post_tag_box
+  <DIV> class='post_tag' text=技术
+    data-v-0c132cb0=
+    class=post_tag
+  <DIV> class='post_tag' text=｜ 应届毕业生
+    data-v-0c132cb0=
+    class=post_tag
+  <SPAN> class='' text=｜
+    data-v-0c132cb0=
+  <DIV> class='post_tag' text=｜CDG CSIG IEG PCG TEG WXG
+    data-v-0c132cb0=
+    class=post_tag
+  <SPAN> class='' text=｜
+    data-v-0c132cb0=
+  <DIV> class='site_box' text=工作地点： 
+
+                      深圳总部 北京 上海 广州 成都 杭州
+    data-v-0c132cb0=
+    class=site_box
+  <DIV> class='site_title' text=工作地点：
+    data-v-0c132cb0=
+    class=site_title
+  <DIV> class='site' text=深圳总部 北京 上海 广州 成都 杭州
+    data-v-0c132cb0=
+    class=site
+
+=== 分页/加载更多元素 ===
+  <UL> class='el-pager' text=123456100

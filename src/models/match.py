@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class FillStatus(str, Enum):
@@ -12,12 +12,15 @@ class FillStatus(str, Enum):
     FILLED = "filled"
     FAILED = "failed"
     SKIPPED = "skipped"
+    NEEDS_USER_INPUT = "needs_user_input"
 
 
 class MatchResult(BaseModel):
     """LLM 深度匹配结果。"""
 
-    job_url: str
+    model_config = ConfigDict(extra="forbid")
+
+    job_url: str = ""  # 由代码后设置，LLM 不输出
     job_title: str = ""
     company: str = ""
 
@@ -25,13 +28,19 @@ class MatchResult(BaseModel):
     direction_match: bool = False
     direction_reason: str = ""
 
-    matched_points: List[str] = Field(default_factory=list, description="匹配点列表")
-    missing_points: List[str] = Field(default_factory=list, description="缺失点列表")
-    reason: str = ""  # LLM 生成的综合匹配理由
+    # 硬性要求统计
+    hard_requirements_total: int = Field(0, description="JD 中识别出的硬性要求总数")
+    hard_requirements_met: int = Field(0, description="候选人满足的硬性要求数量")
+
+    matched_points: List[str] = Field(default_factory=list, description="匹配点列表（格式：[硬性/加分] 内容）")
+    missing_points: List[str] = Field(default_factory=list, description="缺失点列表（格式：[硬性/加分] 内容）")
+    reason: str = ""  # LLM 生成的综合匹配理由，包含评分依据
 
 
 class FillField(BaseModel):
     """申请表单字段。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     # Playwright 提取的元素信息
     label: str = ""
@@ -52,12 +61,16 @@ class FillField(BaseModel):
 class TitleScreenResult(BaseModel):
     """标题语义初筛批量结果。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     related_indices: List[int] = Field(default_factory=list)
     unrelated_indices: List[int] = Field(default_factory=list)
 
 
 class QuotaSortResult(BaseModel):
     """投递配额排序结果。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     recommended: List[int] = Field(default_factory=list, description="推荐的岗位序号列表")
     reasoning: str = ""

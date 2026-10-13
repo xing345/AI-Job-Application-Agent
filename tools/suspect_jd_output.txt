@@ -1,0 +1,102 @@
+﻿=== 检查可疑岗位JD提取 ===
+
+.venv\Scripts\python.exe : Traceback (most recent call last):
+At line:1 char:21
++ ... \ai agent"; .venv\Scripts\python.exe tools\check_suspect_jd.py > tool ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "D:\x\ai agent\tools\check_suspect_jd.py", line 55, in <module>
+    asyncio.run(main())
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 691, in run_un
+til_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "D:\x\ai agent\tools\check_suspect_jd.py", line 21, in main
+    browser = await get_browser()
+              ^^^^^^^^^^^^^^^^^^^
+  File "D:\x\ai agent\src\browser\manager.py", line 113, in get_browser
+    await _manager.start()
+  File "D:\x\ai agent\src\browser\manager.py", line 44, in start
+    self._context = await self._playwright.chromium.launch_persistent_context(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\x\ai agent\.venv\Lib\site-packages\playwright\async_api\_generated.py", line 17030, in launch_persistent_con
+text
+    await self._impl_obj.launch_persistent_context(
+  File "D:\x\ai agent\.venv\Lib\site-packages\playwright\_impl\_browser_type.py", line 165, in launch_persistent_contex
+t
+    result = await self._channel.send_return_as_dict(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\x\ai agent\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 103, in send_return_as_dict
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\x\ai agent\.venv\Lib\site-packages\playwright\_impl\_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TargetClosedError: BrowserType.launch_persistent_context: Target page, context or browser has 
+been closed
+Browser logs:
+
+<launching> C:\Users\Administrator\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe --disable-field-tr
+ial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-windo
+ws --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensi
+ons-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-dev-sh
+m-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,BoundaryEve
+ntDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,LensO
+verlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,AutoDeE
+levate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScreensho
+tNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-blocking 
+--disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb --me
+trics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged-pdf
+ --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relaunch 
+--disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --no-sandbox --disa
+ble-blink-features=AutomationControlled --no-sandbox --user-data-dir=D:\x\ai agent\data\browser_profile --remote-debugg
+ing-pipe about:blank
+<launched> pid=187096
+[pid=187096][out] 正在现有的浏览器会话中打开。
+Call log:
+  - <launching> C:\Users\Administrator\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe --disable-fiel
+d-trial-config --disable-background-networking --disable-background-timer-throttling --disable-backgrounding-occluded-w
+indows --disable-back-forward-cache --disable-breakpad --disable-client-side-phishing-detection --disable-component-ext
+ensions-with-background-pages --disable-component-update --no-default-browser-check --disable-default-apps --disable-de
+v-shm-usage --disable-edgeupdater --disable-extensions --disable-features=AvoidUnnecessaryBeforeUnloadCheckSync,Boundar
+yEventDispatchTracksNodeRemoval,DestroyProfileOnBrowserClose,DialMediaRouteProvider,GlobalMediaControls,HttpsUpgrades,L
+ensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,BlockOriginHeaderModificationOnRedirect,Translate,Aut
+oDeElevate,OptimizationHints,msForceBrowserSignIn,msEdgeUpdateLaunchServicesPreferredVersion --enable-features=CDPScree
+nshotNewSurface --allow-pre-commit-input --disable-hang-monitor --disable-ipc-flooding-protection --disable-popup-block
+ing --disable-prompt-on-repost --disable-renderer-backgrounding --disable-updater-scheduler --force-color-profile=srgb 
+--metrics-recording-only --no-first-run --password-store=basic --use-mock-keychain --no-service-autorun --export-tagged
+-pdf --disable-search-engine-choice-screen --unsafely-disable-devtools-self-xss-warnings --edge-skip-compat-layer-relau
+nch --disable-infobars --disable-search-engine-choice-screen --disable-sync --enable-unsafe-swiftshader --no-sandbox --
+disable-blink-features=AutomationControlled --no-sandbox --user-data-dir=D:\x\ai agent\data\browser_profile --remote-de
+bugging-pipe about:blank
+  - <launched> pid=187096
+  - [pid=187096][out] 正在现有的浏览器会话中打开。
+  - [pid=187096] <gracefully close start>
+  - [pid=187096] <kill>
+  - [pid=187096] <will force kill>
+  - [pid=187096] taskkill stderr: ERROR: The process "187096" not found.
+  - [pid=187096] <process did exit: exitCode=0, signal=null>
+  - [pid=187096] starting temporary directories cleanup
+  - [pid=187096] finished temporary directories cleanup
+  - [pid=187096] <gracefully close end>
+
+Exception ignored in: <function BaseSubprocessTransport.__del__ at 0x000001E67A6EC720>
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_subprocess.py", line 126, in __
+del__
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_subprocess.py", line 104, in cl
+ose
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\proactor_events.py", line 109, in cl
+ose
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 799, in call_s
+oon
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 545, in _check
+_closed
+RuntimeError: Event loop is closed

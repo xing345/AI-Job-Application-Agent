@@ -13,6 +13,7 @@ from src.agent.state import AgentState
 from src.models.job import JobPosting
 from src.search.discoverer import discover_jobs as do_discover
 from src.search.site_registry import get_site_config
+from src.storage import state_db
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,28 @@ async def run(state: AgentState) -> AgentState:
                 seen.add(key)
                 unique.append(j)
 
+        # 接入 SQLite 岗位去重：记录所有发现的岗位
+        new_count = 0
+        seen_count = 0
+        for job in unique:
+            was_seen = await state_db.is_job_seen(job.detail_url)
+            if was_seen:
+                seen_count += 1
+            else:
+                new_count += 1
+            await state_db.upsert_job(
+                job_url=job.detail_url,
+                job_title=job.title,
+                company=job.company,
+                site_name=job.site_name,
+                location=job.location,
+                category_path=job.category_path,
+            )
+
         state.discovered_jobs = unique
-        logger.info("Discovered %d unique jobs from %s", len(unique), site_name)
-        print(f"\n[岗位发现] {site_name}: 共发现 {len(unique)} 个岗位")
+        logger.info("Discovered %d unique jobs from %s (new=%d, seen=%d) run_id=%s",
+                    len(unique), site_name, new_count, seen_count, state.run_id)
+        print(f"\n[岗位发现] {site_name}: 共发现 {len(unique)} 个岗位（新发现 {new_count}，已见过 {seen_count}）")
     except Exception as e:
         state.add_error("discover_jobs", str(e))
         logger.exception("discover_jobs failed")

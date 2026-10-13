@@ -52,6 +52,9 @@ logs/
 data/resumes/
 data/logs/
 data/db/
+data/user_profile.json
+data/agent_state.db
+data/known_fields.db
 output/
 temp/
 tmp/

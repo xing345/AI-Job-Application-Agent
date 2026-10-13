@@ -1,0 +1,52 @@
+﻿=== 拦截米哈游岗位列表API ===
+
+=== API 请求参数 ===
+URL: https://ats.openout.mihoyo.com/ats-portal/v1/job/list
+Method: POST
+Post Data: {"pageNo":1,"pageSize":10,"channelDetailIds":[1],"hireType":1}
+Post JSON (格式化):
+{
+  "pageNo": 1,
+  "pageSize": 10,
+  "channelDetailIds": [
+    1
+  ],
+  "hireType": 1
+}
+
+=== API 响应数据 ===
+Status: 200
+Body (前3000字符):
+{"code":0,"message":"","traceId":"","data":{"list":[{"id":"9630","title":"Golang后端开发工程师","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"程序&技术类","jobNature":"全职","jobNatureId":1,"projectName":"2027届秋招","hurry":true,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"19","objectName":"2027届（2026.9-2027.8之间毕业）"},{"id":"9631","title":"SDK客户端开发工程师","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"程序&技术类","jobNature":"全职","jobNatureId":1,"projectName":"2027届秋招","hurry":true,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"19","objectName":"2027届（2026.9-2027.8之间毕业）"},{"id":"9629","title":"AI人文训练实习生（英语方向）","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"运营类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":null,"objectName":""},{"id":"9628","title":"商务数据采购实习生","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"市场&商务类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"24","objectName":"2028届及之后毕业的在校生"},{"id":"9079","title":"国际化市场品牌（韩）","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"国际化类","jobNature":"全职","jobNatureId":1,"projectName":"2027届秋招","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":null,"objectName":""},{"id":"9625","title":"Agent 策略运营实习生","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"运营类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"24","objectName":"2028届及之后毕业的在校生"},{"id":"9623","title":"综合采购实习生","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"综合类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"25","objectName":"2028届（2027.9-2028.8之间毕业）"},{"id":"9615","title":"用户研究工具开发实习生（AI 应用方向）","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"程序&技术类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":null,"objectName":""},{"id":"7895","title":"游戏特效实习生（Unity/Unreal）","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"美术&表现类","jobNature":"实习","jobNatureId":3,"projectName":"实习生专项","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"本岗位接受 2028/2029/2030 届同学投递","objectId":"24","objectName":"2028届及之后毕业的在校生"},{"id":"9129","title":"游戏特效师（Unity/Unreal）","addressDetailList":[{"addressId":"8","addressDetail":"上海"}],"competencyType":"美术&表现类","jobNature":"全职","jobNatureId":1,"projectName":"2027届秋招","hurry":false,"channelDetailIds":[1,2],"tagList":[],"jobSummary":"","objectId":"19","objectName":"2027届（20
+
+=== 响应JSON结构 ===
+顶层keys: ['code', 'message', 'traceId', 'data', 'success', 'error']
+data keys: ['list', 'pageNo', 'pageSize', 'total']
+岗位数量: 10
+
+第一个岗位:
+{
+  "id": "9630",
+  "title": "Golang后端开发工程师",
+  "addressDetailList": [
+    {
+      "addressId": "8",
+      "addressDetail": "上海"
+    }
+  ],
+  "competencyType": "程序&技术类",
+  "jobNature": "全职",
+  "jobNatureId": 1,
+  "projectName": "2027届秋招",
+  "hurry": true,
+  "channelDetailIds": [
+    1,
+    2
+  ],
+  "tagList": [],
+  "jobSummary": "",
+  "objectId": "19",
+  "objectName": "2027届（2026.9-2027.8之间毕业）"
+}
+
+完成

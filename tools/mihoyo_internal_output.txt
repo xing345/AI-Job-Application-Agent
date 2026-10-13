@@ -1,0 +1,51 @@
+﻿=== 米哈游卡片内部结构检查 ===
+当前URL: https://jobs.mihoyo.com/#/campus/position
+卡片数量: 10
+
+第一个卡片内部HTML（前1000字符）:
+<div class="titleWrapper___VERKq ant-flex css-96wdb2 ant-flex-wrap-nowrap ant-flex-align-center" style="gap: 8px;"><span class="jobName___fD59h">Golang后端开发工程师</span><span class="ant-tag ant-tag-processing tag___G6wlD tagWrapper___boMKu round___EBpDv default___cJMsM css-96wdb2">全职</span><svg width="39" height="16" viewBox="0 0 48 22" fill="none" xmlns="http://www.w3.org/2000/svg" class="tag___G6wlD"><path d="M0 11C0 4.925 4.925 0 11 0h35.556c.755 0 1.33.68 1.205 1.425L45.677 13.84A9.778 9.778 0 0 1 36.034 22H11C4.925 22 0 17.075 0 11Z" fill="url(#hot_svg__a)"></path><path d="M11 .183h35.556c.642 0 1.13.578 1.024 1.211L45.496 13.81a9.594 9.594 0 0 1-9.462 8.007H11C5.026 21.817.183 16.974.183 11S5.026.183 11 .183Z" stroke="#fff" stroke-opacity="0.2" stroke-width="0.367"></path><g filter="url(#hot_svg__b)"><mask id="hot_svg__d" fill="#fff"><path d="m11.71 7.11-.435 3.3h3.345l.405-2.73-.435-.57h3.315L16.75 15.6h-2.88l.57-3.75h-3.36l-.525 3.75h-2.88L8.83 7.53l-.585-.42h3.465Zm16.657 0c.14 0 
+
+卡片内a标签数量: 0
+
+卡片内可点击元素:
+  <DIV> class='titleWrapper___VERKq ant-flex ' cursor=pointer text=Golang后端开发工程师全职
+  <SPAN> class='jobName___fD59h' cursor=pointer text=Golang后端开发工程师
+  <SPAN> class='ant-tag ant-tag-processing tag' cursor=pointer text=全职
+  <svg> class='[object SVGAnimatedString]' cursor=pointer text=
+  <path> class='[object SVGAnimatedString]' cursor=pointer text=
+  <path> class='[object SVGAnimatedString]' cursor=pointer text=
+  <g> class='[object SVGAnimatedString]' cursor=pointer text=
+  <mask> class='[object SVGAnimatedString]' cursor=pointer text=
+  <path> class='[object SVGAnimatedString]' cursor=pointer text=
+  <path> class='[object SVGAnimatedString]' cursor=pointer text=
+  <path> class='[object SVGAnimatedString]' cursor=pointer text=
+  <defs> class='[object SVGAnimatedString]' cursor=pointer text=
+  <linearGradient> class='[object SVGAnimatedString]' cursor=pointer text=
+  <stop> class='[object SVGAnimatedString]' cursor=pointer text=
+  <stop> class='[object SVGAnimatedString]' cursor=pointer text=
+  <linearGradient> class='[object SVGAnimatedString]' cursor=pointer text=
+  <stop> class='[object SVGAnimatedString]' cursor=pointer text=
+  <stop> class='[object SVGAnimatedString]' cursor=pointer text=
+  <filter> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feFlood> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feColorMatrix> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feOffset> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feGaussianBlur> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feComposite> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feColorMatrix> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feBlend> class='[object SVGAnimatedString]' cursor=pointer text=
+  <feBlend> class='[object SVGAnimatedString]' cursor=pointer text=
+  <DIV> class='subTitle___w1te5' cursor=pointer text=上海程序&技术类2027届（2026.9-2027.8之间毕
+  <SPAN> class='contentText___NpIRf' cursor=pointer text=上海
+  <SPAN> class='contentText___NpIRf' cursor=pointer text=程序&技术类
+  <SPAN> class='contentText___NpIRf' cursor=pointer text=2027届（2026.9-2027.8之间毕业）
+
+--- 检查页面JS变量 ---
+  相关window变量: ['oncontentvisibilityautostatechange', 'oncontextrestored', 'onformdata', 'onloadeddata', 'onloadedmetadata', 'onpopstate', 'cookieStore']
+  有React Fiber: False
+
+--- 检查网络请求 ---
+  API请求: https://ee-sentry.app.mihoyo.com/api/98/envelope/?sentry_key=edbe33cbd1424d0b8733ef7a8020b64d&sentry
+  方法: POST
+
+完成

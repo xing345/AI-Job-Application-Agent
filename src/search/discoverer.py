@@ -19,6 +19,7 @@ from src.browser.hitl import default_handler as hitl
 from src.browser.manager import get_browser
 from src.browser.navigator import wait_for_load
 from src.models.job import JobPosting
+from src.search.adapters import get_adapter
 from src.search.site_registry import SiteConfig
 
 logger = logging.getLogger(__name__)
@@ -97,13 +98,13 @@ JOB_TITLE_KEYWORDS = [
 
 
 async def discover_jobs(config: SiteConfig) -> List[JobPosting]:
-    """从指定站点全量收集岗位（通用发现策略）。
+    """从指定站点全量收集岗位。
 
-    流程：
-    1. 打开分类页，等待 SPA 加载
-    2. HITL 检测（登录墙/验证码）
-    3. 通用链接提取 + 滚动加载
-    4. 如果配置了专用 selector，优先用专用提取
+    策略优先级：
+    1. 专用站点适配器（如果已注册）—— 结构化提取，含公司/地点字段
+    2. 配置的专用 selector 提取
+    3. 通用链接发现 + 滚动加载
+    4. 深度探测（兜底）
     """
     browser = await get_browser()
     page = browser.page
@@ -123,17 +124,25 @@ async def discover_jobs(config: SiteConfig) -> List[JobPosting]:
         # HITL 检测
         await hitl.check_and_pause(page)
 
-        # 优先用配置的专用 selector（如果有且有效）
-        if config.job_card_selector and not config.job_card_selector.startswith("a[href*="):
-            # 专用卡片模式
+        # 策略1：专用站点适配器（优先）
+        adapter_cls = get_adapter(config.name)
+        if adapter_cls:
+            logger.info("使用专用适配器: %s", adapter_cls.__name__)
+            adapter = adapter_cls(config)
+            jobs = await adapter.discover_jobs(page)
+            if jobs:
+                logger.info("适配器发现 %d 个岗位", len(jobs))
+
+        # 策略2：专用 selector 提取（如果适配器未找到或无适配器）
+        if not jobs and config.job_card_selector and not config.job_card_selector.startswith("a[href*="):
             jobs = await _discover_with_selectors(page, config, seen_urls)
 
-        # 通用链接模式（专用模式没找到时，或配置本身就是链接模式）
+        # 策略3：通用链接发现
         if not jobs:
             logger.info("使用通用链接发现策略...")
             jobs = await _discover_by_links(page, config, seen_urls)
 
-        # 如果还是没找到，尝试深度探测
+        # 策略4：深度探测（兜底）
         if not jobs:
             logger.info("通用策略未找到，尝试深度探测...")
             jobs = await _deep_probe(page, config, seen_urls)
@@ -423,9 +432,12 @@ def _is_job_detail_url(url: str, config: SiteConfig) -> bool:
         if re.search(pattern, url, re.IGNORECASE):
             return True
 
-    # 兜底：路径中包含 6 位以上数字（常见于详情页 ID）
-    if re.search(r"/\d{6,}", url) and not re.search(r"/(page|p)/\d+", url, re.IGNORECASE):
-        return True
+    # 兜底：路径中同时包含岗位关键词和 6 位以上数字（详情页 ID）
+    # 收紧：不能只因为有数字就认为是岗位页，必须有岗位相关关键词
+    job_keywords = r"(position|job|recruit|recruitment|detail|post|opportunity|career|zhaopin|gangwei)"
+    if re.search(job_keywords, url, re.IGNORECASE) and re.search(r"/\d{6,}", url):
+        if not re.search(r"/(page|p)/\d+", url, re.IGNORECASE):
+            return True
 
     return False
 

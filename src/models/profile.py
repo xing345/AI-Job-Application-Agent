@@ -7,10 +7,12 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Education(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     school: str = ""
     major: str = ""
     degree: str = ""  # 本科/硕士/博士/大专
@@ -20,6 +22,8 @@ class Education(BaseModel):
 
 
 class WorkExperience(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     company: str = ""
     position: str = ""
     start_date: Optional[str] = None
@@ -29,19 +33,29 @@ class WorkExperience(BaseModel):
 
 
 class ProjectExperience(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = ""
     role: str = ""
     tech_stack: List[str] = Field(default_factory=list)
     description: str = ""
     achievements: str = ""
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
 
 
 class UserProfile(BaseModel):
     """候选人画像。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = ""
     phone: str = ""
     email: str = ""
+    address: str = ""
+    github: str = ""
+    gitee: str = ""
+    birth_date: str = ""
 
     education: List[Education] = Field(default_factory=list)
     work_experience: List[WorkExperience] = Field(default_factory=list)
@@ -113,6 +127,8 @@ class UserProfile(BaseModel):
 
 class Resume(BaseModel):
     """从 PDF 或 JSON 加载的结构化简历，只解析不修改。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     raw_text: str = ""
     profile: Optional[UserProfile] = None

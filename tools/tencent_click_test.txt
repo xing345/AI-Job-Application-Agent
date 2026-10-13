@@ -1,0 +1,32 @@
+﻿=== 腾讯岗位卡片点击测试 ===
+
+岗位卡片数量: 10
+
+--- 卡片 1: AI全栈工程师 ---
+点击前URL: https://join.qq.com/post.html
+点击后URL: https://join.qq.com/post.html
+URL变化: False
+页面标题: 岗位投递 | 腾讯校招
+URL没变化，检查是否有新标签页...
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707398326592512
+
+--- 卡片 2: Agent开发工程师 ---
+点击前URL: https://join.qq.com/post.html
+点击后URL: https://join.qq.com/post.html
+URL变化: False
+页面标题: 岗位投递 | 腾讯校招
+URL没变化，检查是否有新标签页...
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707398326592512
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707395466077184
+
+--- 卡片 3: AI应用工程师 ---
+点击前URL: https://join.qq.com/post.html
+点击后URL: https://join.qq.com/post.html
+URL变化: False
+页面标题: 岗位投递 | 腾讯校招
+URL没变化，检查是否有新标签页...
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707398326592512
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707395466077184
+  新标签页: https://join.qq.com/post_detail.html?postid=1282707395466077185
+
+完成

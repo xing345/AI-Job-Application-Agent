@@ -15,8 +15,39 @@ from src.llm.prompts import quota_sort_prompt
 from src.models.job import JobDetail
 from src.models.match import MatchResult, QuotaSortResult
 from src.search.site_registry import get_site_config
+from src.storage import state_db
 
 logger = logging.getLogger(__name__)
+
+
+def _sort_key(match: MatchResult) -> tuple:
+    """排序键：匹配分降序 → 硬性要求满足度 → 方向匹配。
+
+    返回 tuple，用于 sorted(reverse=True)：
+    - 第1位：匹配分（高优先）
+    - 第2位：硬性要求满足比例（高优先）
+    - 第3位：方向匹配（True 优先）
+    """
+    score = match.score
+    hard_ratio = (match.hard_requirements_met / match.hard_requirements_total
+                  if match.hard_requirements_total > 0 else 0)
+    direction = 1 if match.direction_match else 0
+    return (score, hard_ratio, direction)
+
+
+def _fallback_sort(candidates: List[JobDetail], matches: List[MatchResult], max_count: int) -> List[int]:
+    """LLM 排序失败时的回退排序：按匹配分降序，同分时按硬性要求满足度。"""
+    # 构造 (index, match) 列表
+    indexed = []
+    for i, match in enumerate(matches):
+        if i < len(candidates):
+            indexed.append((i, match))
+
+    # 按排序键降序
+    indexed.sort(key=lambda x: _sort_key(x[1]), reverse=True)
+
+    # 取前 max_count 个
+    return [idx for idx, _ in indexed[:max_count]]
 
 
 async def quota_sort(
@@ -24,46 +55,72 @@ async def quota_sort(
     candidates: List[JobDetail],
     max_count: int,
 ) -> List[int]:
-    """超过配额时，LLM 辅助排序推荐。"""
+    """超过配额时，LLM 辅助排序推荐。
+
+    排序优先级：
+    1. 目标方向匹配的岗位优先
+    2. 匹配分降序
+    3. 硬性要求满足度高的优先
+    4. 兼顾岗位多样性（不同团队/类别）
+    """
     if not state.match_results:
         return list(range(min(max_count, len(candidates))))
 
     target_directions = state.profile.target_directions if state.profile else []
     resume_summary = state.resume.full_text()[:500] if state.resume else ""
 
-    # 构造候选岗位摘要
+    # 构造候选岗位摘要（包含硬性要求满足情况）
     jobs_summary_lines = []
     for i, (detail, match) in enumerate(zip(candidates, state.match_results)):
+        hard_info = f"硬性要求{match.hard_requirements_met}/{match.hard_requirements_total}" if match.hard_requirements_total else ""
         jobs_summary_lines.append(
             f"{i}. 岗位: {detail.posting.title} | 公司: {detail.posting.company} | "
-            f"匹配度: {match.score} | 方向匹配: {match.direction_match} | "
-            f"JD摘要: {detail.jd_for_match()[:100]}"
+            f"地点: {detail.posting.location} | 匹配度: {match.score} | "
+            f"方向匹配: {match.direction_match} | {hard_info} | "
+            f"JD摘要: {detail.jd_for_match()[:80]}"
         )
     jobs_summary = "\n".join(jobs_summary_lines)
 
     messages = quota_sort_prompt(target_directions, resume_summary, jobs_summary, max_count)
 
     try:
-        result: QuotaSortResult = await llm.chat_structured(messages, QuotaSortResult, temperature=0.1)
-        logger.info("Quota sort: recommended %d jobs, reason: %s", len(result.recommended), result.reasoning[:100])
-        return result.recommended
+        result: QuotaSortResult = await llm.chat_structured(messages, QuotaSortResult, temperature=0.1, run_id=state.run_id)
+        # 验证推荐索引有效性
+        valid = [idx for idx in result.recommended if 0 <= idx < len(candidates)]
+        if valid:
+            logger.info("Quota sort (LLM): recommended %d jobs, reason: %s",
+                        len(valid), result.reasoning[:100])
+            return valid
+        logger.warning("LLM returned invalid indices, falling back to score sort")
     except Exception as e:
-        logger.warning("Quota sort failed, falling back to top by score: %s", e)
-        return list(range(min(max_count, len(candidates))))
+        logger.warning("Quota sort LLM failed, falling back to score sort: %s", e)
+
+    # 回退：按匹配分降序
+    return _fallback_sort(candidates, state.match_results, max_count)
 
 
 def _print_match_table(details: List[JobDetail], matches: List[MatchResult]) -> None:
     """终端打印匹配表格。"""
-    print("\n" + "=" * 100)
-    print(f"{'序号':<4} {'分数':<6} {'方向':<6} {'岗位':<45} {'公司':<20} {'地点':<12}")
-    print("-" * 100)
+    print("\n" + "=" * 110)
+    print(f"{'序号':<4} {'分数':<6} {'方向':<5} {'硬性':<7} {'岗位':<38} {'公司':<16} {'地点':<10}")
+    print("-" * 110)
     for i, (detail, match) in enumerate(zip(details, matches)):
         direction = "Y" if match.direction_match else "N"
-        title = detail.posting.title[:43] + ".." if len(detail.posting.title) > 45 else detail.posting.title
-        company = detail.posting.company[:18] + ".." if len(detail.posting.company) > 20 else detail.posting.company
-        loc = detail.location[:10]
-        print(f"{i:<4} {match.score:<6} {direction:<6} {title:<45} {company:<20} {loc:<12}")
-    print("=" * 100)
+        hard = f"{match.hard_requirements_met}/{match.hard_requirements_total}" if match.hard_requirements_total else "-"
+        title = detail.posting.title[:36] + ".." if len(detail.posting.title) > 38 else detail.posting.title
+        company = detail.posting.company[:14] + ".." if len(detail.posting.company) > 16 else detail.posting.company
+        loc = detail.posting.location[:8] or detail.location[:8]
+        print(f"{i:<4} {match.score:<6} {direction:<5} {hard:<7} {title:<38} {company:<16} {loc:<10}")
+    print("=" * 110)
+
+    # 打印 Top3 的匹配理由
+    print("\n【匹配理由 Top3】")
+    for i, (detail, match) in enumerate(zip(details[:3], matches[:3])):
+        print(f"\n  [{i}] {detail.posting.title} (分数: {match.score})")
+        if match.reason:
+            print(f"      理由: {match.reason[:150]}")
+        if match.missing_points:
+            print(f"      缺失: {'; '.join(match.missing_points[:3])}")
 
 
 async def run(state: AgentState) -> AgentState:
@@ -85,6 +142,27 @@ async def run(state: AgentState) -> AgentState:
     # 如果匹配结果数量和详情不一致，用详情数量
     if len(matches) != len(details):
         logger.warning("match_results count (%d) != job_details count (%d)", len(matches), len(details))
+
+    # 过滤已投递的岗位（本周期内）
+    if state.site_name:
+        filtered_details = []
+        filtered_matches = []
+        skipped_count = 0
+        for i, detail in enumerate(details):
+            already = await state_db.has_applied(detail.posting.detail_url, state.site_name)
+            if already:
+                skipped_count += 1
+                logger.info("Skipping already applied job: %s", detail.posting.title)
+            else:
+                filtered_details.append(detail)
+                if i < len(matches):
+                    filtered_matches.append(matches[i])
+        if skipped_count > 0:
+            print(f"\n[去重提醒] 已过滤 {skipped_count} 个本周期内已投递的岗位")
+            details = filtered_details
+            matches = filtered_matches
+            state.job_details = filtered_details
+            state.match_results = filtered_matches
 
     _print_match_table(details, matches)
 

@@ -1,0 +1,21 @@
+﻿=== 米哈游网络请求监听 ===
+
+共捕获 10 个非静态请求:
+  [0] GET document https://jobs.mihoyo.com/
+  [1] POST xhr https://south-gate.mihoyo.com/sniffing/collect/perf-log
+  [2] GET xhr https://south-gate.mihoyo.com/sniffing/together-apis/project/events/globalAttribute/67?vid=2
+  [3] POST xhr https://ats.openout.mihoyo.com/ats-portal/v1/user/info
+  [4] POST xhr https://ats.openout.mihoyo.com/ats-portal/v2/common/enum_list/get
+  [5] POST xhr https://ats.openout.mihoyo.com/ats-portal/v2/common/enum_list/get
+  [6] POST xhr https://ats.openout.mihoyo.com/ats-portal/v2/common/enum_tree/get
+  [7] POST xhr https://ats.openout.mihoyo.com/ats-portal/v1/job/list
+  [8] POST xhr https://south-gate.mihoyo.com/sniffing/collect/web-log
+  [9] POST xhr https://south-gate.mihoyo.com/sniffing/collect/perf-log
+
+--- 点击第2页 ---
+翻页后捕获 1 个请求:
+  [0] POST xhr https://ats.openout.mihoyo.com/ats-portal/v1/job/list
+
+--- 检查内联script数据 ---
+
+完成

@@ -2,7 +2,7 @@
 
 节点流程：
 load_profile → discover_jobs → screen_titles → fetch_jd → match_jobs → confirm_list
-→ [循环] fill_application → hitl_submit → (还有岗位? 继续 fill : 结束)
+→ [循环] fill_application → record_result → (还有岗位? 继续 fill : 结束)
 
 如果指定了 --job-url，跳过 discover_jobs/screen_titles，直接 fetch_jd。
 """
@@ -14,7 +14,7 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from src.agent.state import AgentState
-from src.agent.nodes import load_profile, discover_jobs, screen_titles, fetch_jd, match_jobs, confirm_list, fill_application, hitl_submit
+from src.agent.nodes import load_profile, discover_jobs, screen_titles, fetch_jd, match_jobs, confirm_list, fill_application, record_result
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def build_graph():
     workflow.add_node("match_jobs", match_jobs.run)
     workflow.add_node("confirm_list", confirm_list.run)
     workflow.add_node("fill_application", fill_application.run)
-    workflow.add_node("hitl_submit", hitl_submit.run)
+    workflow.add_node("record_result", record_result.run)
 
     # 入口
     workflow.set_entry_point("load_profile")
@@ -105,17 +105,17 @@ def build_graph():
         END: END,
     })
 
-    # fill_application → hitl_submit
-    workflow.add_edge("fill_application", "hitl_submit")
+    # fill_application → record_result
+    workflow.add_edge("fill_application", "record_result")
 
-    # hitl_submit 后：还有岗位则继续 fill，否则结束
+    # record_result 后：还有岗位则继续 fill，否则结束
     def after_submit(state: AgentState) -> str:
         if state.current_job_index < len(state.apply_queue):
             return "fill_application"
         logger.info("All applications completed")
         return END
 
-    workflow.add_conditional_edges("hitl_submit", after_submit, {
+    workflow.add_conditional_edges("record_result", after_submit, {
         "fill_application": "fill_application",
         END: END,
     })

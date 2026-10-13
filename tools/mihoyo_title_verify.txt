@@ -1,0 +1,25 @@
+﻿=== 标题匹配函数测试 ===
+  match=True | got='基础研究-游戏AI研发工程师（Agent方向）' exp='基础研究-游戏AI研发工程师（Agent方向）'
+  match=False | got='基础研究-图形研究员（动捕动画方向）' exp='基础研究-游戏AI研发工程师（Agent方向）'
+  match=True | got='游戏AI研发工程师(Agent方向)' exp='基础研究-游戏AI研发工程师（Agent方向）'
+
+=== 游戏AI研发实习生（Agent方向） (ID=8337) ===
+.venv\Scripts\python.exe : Mihoyo JD extraction failed after 4 attempts: https://jobs.mihoyo.com/#/campus/position/8337
+ (got title='图形研究员实习生（角色动作生成方向）-AI引擎', len=1075)
+At line:1 char:59
++ ... X="mihoyo"; .venv\Scripts\python.exe tools\verify_mihoyo_title_match. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Mihoyo JD extra...I引擎', len=1075):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  提取失败（返回None）
+
+=== 基础研究-游戏AI研发工程师（Agent方向） (ID=8925) ===
+Mihoyo JD extraction failed after 4 attempts: https://jobs.mihoyo.com/#/campus/position/8925 (got title='基础研究-图形研究员（动捕动
+画方向）', len=1899)
+  提取失败（返回None）
+
+=== 基础研究-Agent 算法研究员 (ID=8919) ===
+Mihoyo JD extraction failed after 4 attempts: https://jobs.mihoyo.com/#/campus/position/8919 (got title='基础研究-图形研究员（动捕动
+画方向）', len=2147)
+  提取失败（返回None）

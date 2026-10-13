@@ -1,0 +1,112 @@
+﻿=== 腾讯招聘页面结构诊断 ===
+
+页面标题: 岗位投递 | 腾讯校招
+当前URL: https://join.qq.com/post.html
+
+=== a标签数量: 14 ===
+  [0] href=javascript:void(0) text=首页
+  [1] href=javascript:void(0) text=青云计划
+  [2] href=javascript:void(0) text=岗位投递
+  [3] href=javascript:void(0) text=招聘动态
+  [4] href=javascript:void(0) text=了解腾讯
+  [5] href=javascript:void(0) text=求职攻略
+  [6] href=about.html text=部门介绍
+  [8] href=https://www.tencent.com/zh-cn/index.html text=关于腾讯
+  [9] href=https://gongyi.qq.com/ text=腾讯公益
+  [10] href=http://kf.qq.com/ text=客服中心
+  [11] href=termsservice.html text=服务协议
+  [12] href=privacy.html text=隐私政策
+  [13] href=http://www.tencent.com/legal/html/zh-cn/index.html text=知识产权
+
+=== 岗位卡片候选元素 ===
+
+  selector='[class*="post"]' count=63
+    <DIV> class='box post' text=腾讯校园招聘 3
+        首页  青云招聘 青云奖学金 青云计划 岗位投递 招聘动态 了解腾讯 求职攻略  登录
+    <DIV> class='post_content' text=查看
+
+                   应聘项目
+
+                          应届毕业生
+    <UL> class='post_list' text=AI全栈工程师 技术 ｜ 应届毕业生   ｜CDG CSIG IEG PCG TEG WXG  工作地点： 
+
+    
+
+  selector='[class*="item"]' count=73
+    <DIV> class='header_qingyun_popover_item' text=青云招聘
+    <DIV> class='header_qingyun_popover_item' text=青云奖学金
+    <DIV> class='el-collapse-item is-active' text=应聘项目
+
+                          应届毕业生
+
+                     
+
+  selector='[class*="list"] > div' count=7
+    <DIV> class='tooltip_box' text=招聘范围
+    <DIV> class='tooltip_box' text=招聘范围
+    <DIV> class='tooltip_box' text=招聘范围
+
+  selector='[class*="list"] > li' count=10
+    <LI> class='post_box' text=AI全栈工程师 技术 ｜ 应届毕业生   ｜CDG CSIG IEG PCG TEG WXG  工作地点： 
+
+    
+    <LI> class='post_box' text=Agent开发工程师 技术 ｜ 应届毕业生   ｜CDG CSIG IEG PCG TEG WXG  工作地点： 
+
+ 
+    <LI> class='post_box' text=AI应用工程师 技术 ｜ 应届毕业生   ｜CSIG IEG PCG TEG WXG  工作地点： 
+
+        
+
+=== 页面文本前50行 ===
+  0: 腾讯校园招聘
+  1: 3 首页 青云计划 岗位投递 招聘动态 了解腾讯 求职攻略 登录
+  2: 查看
+  3: 应聘项目
+  4: 应届毕业生
+  5: 2027校园招聘
+  6: 招聘范围
+  7: 实习生
+  8: 应届实习
+  9: 招聘范围
+  10: 日常实习
+  11: 招聘范围
+  12: 人才专项
+  13: 青云计划-应届生
+  14: 招聘范围
+  15: 青云计划-实习生
+  16: 招聘范围
+  17: 岗位类别
+  18: 工作城市
+  19: 面试地点
+  20: 事业群部门介绍
+  21: 共998个岗位
+  22: 不确定适合哪个岗位？ima「腾讯校招官方知识库」帮你快速判断
+  23: AI全栈工程师
+  24: 技术 ｜ 应届毕业生 ｜CDG CSIG IEG PCG TEG WXG
+  25: 工作地点： 深圳总部 北京 上海 广州 成都 杭州
+  26: Agent开发工程师
+  27: 技术 ｜ 应届毕业生 ｜CDG CSIG IEG PCG TEG WXG
+  28: 工作地点： 深圳总部 北京 上海 广州 成都
+  29: AI应用工程师
+  30: 技术 ｜ 应届毕业生 ｜CSIG IEG PCG TEG WXG
+  31: 工作地点： 深圳总部 北京 上海 广州 成都
+  32: AI算法工程
+  33: 技术 ｜ 应届毕业生 ｜CSIG IEG PCG TEG WXG
+  34: 工作地点： 深圳总部 北京 上海 广州
+  35: 技术研究-高性能计算方向
+  36: 技术 ｜ 应届毕业生 ｜CDG CSIG PCG TEG WXG
+  37: 工作地点： 深圳总部 北京 上海 广州 成都 合肥
+  38: 技术研究-基础架构方向
+  39: 技术 ｜ 应届毕业生 ｜CDG CSIG TEG WXG
+  40: 工作地点： 深圳总部 北京 上海 广州
+  41: AI产品经理
+  42: 产品 ｜ 应届毕业生 ｜CDG CSIG IEG PCG TEG WXG
+  43: 工作地点： 深圳总部 北京 上海 广州
+  44: 投资运营分析师
+  45: 市场 ｜ 应届毕业生 ｜CDG
+  46: 工作地点： 北京
+  47: 投资分析
+  48: 市场 ｜ 应届毕业生 ｜CDG
+  49: 工作地点： 北京
+
+诊断完成

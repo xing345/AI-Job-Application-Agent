@@ -1,0 +1,13 @@
+﻿=== 米哈游API适配器验证 ===
+
+=== 验证结果 ===
+发现岗位数: 0
+.venv\Scripts\python.exe : API fetch error: False
+At line:1 char:21
++ ... \ai agent"; .venv\Scripts\python.exe tools\verify_mihoyo_api.py > too ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (API fetch error: False:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+验证完成
