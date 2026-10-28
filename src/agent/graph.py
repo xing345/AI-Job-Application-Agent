@@ -59,13 +59,17 @@ def build_graph():
     workflow.add_node("match_jobs", match_jobs.run)
     workflow.add_node("confirm_list", confirm_list.run)
     workflow.add_node("fill_application", fill_application.run)
+    workflow.add_node("prepare_direct", fill_application.prepare_direct_apply)
     workflow.add_node("record_result", record_result.run)
 
     # 入口
     workflow.set_entry_point("load_profile")
 
-    # load_profile 后：有 job_urls 直接 fetch_jd，否则 discover_jobs
+    # load_profile 后：直达填表 > 直接 job_url > 站点发现
     def after_load(state: AgentState) -> str:
+        if state.apply_url:
+            logger.info("Direct apply URL specified, jumping straight to form fill")
+            return "prepare_direct"
         if state.job_urls:
             logger.info("Direct job URLs specified, skipping discovery")
             return "fetch_jd"
@@ -77,10 +81,14 @@ def build_graph():
         return END
 
     workflow.add_conditional_edges("load_profile", after_load, {
+        "prepare_direct": "prepare_direct",
         "discover_jobs": "discover_jobs",
         "fetch_jd": "fetch_jd",
         END: END,
     })
+
+    # 直达填表：prepare_direct → fill_application → record_result → END
+    workflow.add_edge("prepare_direct", "fill_application")
 
     # discover_jobs → screen_titles
     workflow.add_edge("discover_jobs", "screen_titles")

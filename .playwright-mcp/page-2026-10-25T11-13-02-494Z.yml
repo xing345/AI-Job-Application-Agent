@@ -1,0 +1,37 @@
+- generic [ref=e4]:
+  - generic [ref=e7]:
+    - heading [level=1] [ref=e8]:
+      - link [ref=e9] [cursor=pointer]:
+        - /url: /campus/
+        - img [ref=e10]:
+          - generic [ref=e12]: 校招
+    - generic [ref=e28]:
+      - link "首页" [ref=e31] [cursor=pointer]:
+        - /url: /campus/
+      - generic [ref=e32] [cursor=pointer]: 技术人才项目
+      - link "职位" [ref=e37] [cursor=pointer]:
+        - /url: /campus/position
+      - link "招聘动态" [ref=e40] [cursor=pointer]:
+        - /url: /campus/page-6272Gc
+      - link "产品与技术" [ref=e43] [cursor=pointer]:
+        - /url: /campus/page-AgCQiO
+      - link "成长与回报" [ref=e46] [cursor=pointer]:
+        - /url: /campus/page-3pEJ9S
+    - generic [ref=e47]:
+      - link "社会招聘" [ref=e50] [cursor=pointer]:
+        - /url: //jobs.bytedance.com
+      - generic [ref=e51]: 156******26
+  - generic [ref=e54]:
+    - button "animation" [ref=e57]
+    - main [ref=e67]
+    - complementary:
+      - generic:
+        - generic:
+          - generic:
+            - button "打开 AI 助手" [ref=e72] [cursor=pointer]
+            - generic [aria-hidden]:
+              - generic:
+                - generic:
+                  - generic [aria-hidden]: 👋
+                  - generic: Hi，有什么可以帮你？
+                - paragraph: 我可以推荐岗位、查询投递进度、解答招聘相关问题。想从哪个开始？

@@ -29,10 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="自动求职 Agent")
     parser.add_argument("--site", type=str, default="", help="招聘站点名称（如 bytedance, bilibili, tencent）")
     parser.add_argument("--job-url", type=str, action="append", default=[], help="直接指定岗位详情页 URL（可多次指定，跳过岗位发现）")
+    parser.add_argument("--apply-url", type=str, default="", help="直达填表：给定一个投递/表单链接，打开后直接填表，跳过发现/初筛/匹配")
     parser.add_argument("--resume", type=str, default="", help="简历文件路径（PDF/JSON/TXT）")
     parser.add_argument("--profile", type=str, default="", help="用户画像 JSON 路径")
     parser.add_argument("--discover-url", type=str, default="", help="直接指定任意招聘列表页 URL，自动发现岗位（无需预先注册站点）")
     parser.add_argument("--resume-run", type=str, default="", help="断点续跑：指定 session_id 恢复上次状态")
+    parser.add_argument("--refresh", action="store_true", help="强制重新发现岗位（默认复用本地缓存的发现/JD/匹配结果）")
+    parser.add_argument("--max-deep", type=int, default=80, help="每个站点深度抓取JD+匹配的岗位上限（按方向相关度排序，0=不限；默认80）")
     parser.add_argument("--verbose", "-v", action="store_true", help="详细日志")
     parser.add_argument("--list-sites", action="store_true", help="列出支持的招聘站点")
     return parser.parse_args()
@@ -41,6 +44,9 @@ def parse_args() -> argparse.Namespace:
 async def main() -> None:
     args = parse_args()
     session_id = args.resume_run or str(uuid.uuid4())[:8]
+    if args.refresh:
+        os.environ["JOB_AGENT_REFRESH"] = "1"
+    os.environ["JOB_AGENT_MAX_DEEP"] = str(max(0, args.max_deep))
     setup_logging(verbose=args.verbose, run_id=session_id)
     logger = logging.getLogger(__name__)
 
@@ -76,6 +82,7 @@ async def main() -> None:
         run_id=session_id,
         site_name=site_name,
         job_urls=args.job_url,
+        apply_url=args.apply_url,
         resume_path=args.resume,
         profile_path=args.profile,
     )
@@ -88,14 +95,20 @@ async def main() -> None:
         else:
             logger.warning("未找到会话 %s 的保存状态，将从头开始", args.resume_run)
 
-    if not state.site_name and not state.job_urls:
-        print("错误：请指定 --site 或 --job-url")
+    if not state.site_name and not state.job_urls and not state.apply_url:
+        print("错误：请指定 --site、--job-url 或 --apply-url")
         print("使用 --list-sites 查看支持的站点")
         sys.exit(1)
 
     try:
         await state_db.init_db()
         logger.info("Database ready")
+
+        # 直达填表：走通用 MCP 浏览器 agent（不启动旧的固定 selector 流程）
+        if state.apply_url:
+            from src.browser_agent.apply import run_apply
+            await run_apply(state.apply_url, args.profile, args.resume, run_id=session_id)
+            return
 
         await get_browser()
         logger.info("Browser ready")

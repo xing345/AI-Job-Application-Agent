@@ -48,6 +48,7 @@ class TestInitDB:
         assert "agent_state" in tables
         assert "jobs" in tables
         assert "schema_version" in tables
+        assert "known_fields" in tables
 
     @pytest.mark.asyncio
     async def test_schema_version_recorded(self, temp_db):
@@ -56,7 +57,7 @@ class TestInitDB:
         async with aiosqlite.connect(temp_db) as db:
             cursor = await db.execute("SELECT MAX(version) FROM schema_version")
             row = await cursor.fetchone()
-        assert row[0] == 3
+        assert row[0] == 5
 
     @pytest.mark.asyncio
     async def test_init_idempotent(self, temp_db):
@@ -181,3 +182,36 @@ class TestStatePersistence:
         await state_db_module.save_state("session_1", {"version": 3})
         loaded = await state_db_module.load_latest_state("session_1")
         assert loaded["version"] == 3
+
+
+class TestKnownFields:
+    @pytest.mark.asyncio
+    async def test_exact_semantic_match(self, temp_db):
+        await state_db_module.init_db()
+        await state_db_module.upsert_known_field("id_card", "身份证号", "110101199001011234")
+        hit = await state_db_module.find_known_field(label="身份证号", semantic_type="id_card")
+        assert hit is not None
+        assert hit["value"] == "110101199001011234"
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_label_match(self, temp_db):
+        await state_db_module.init_db()
+        await state_db_module.upsert_known_field("id_card", "身份证号", "110101199001011234")
+        # 新站点标签带"请输入"等助词，应能模糊命中
+        hit = await state_db_module.find_known_field(label="请输入身份证号", semantic_type="")
+        assert hit is not None
+        assert hit["value"] == "110101199001011234"
+
+    @pytest.mark.asyncio
+    async def test_upsert_updates_value(self, temp_db):
+        await state_db_module.init_db()
+        await state_db_module.upsert_known_field("emergency_contact", "紧急联系人", "张三")
+        await state_db_module.upsert_known_field("emergency_contact", "紧急联系人", "李四")
+        hit = await state_db_module.find_known_field(semantic_type="emergency_contact")
+        assert hit["value"] == "李四"
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_none(self, temp_db):
+        await state_db_module.init_db()
+        hit = await state_db_module.find_known_field(label="根本没填过的字段", semantic_type="nope")
+        assert hit is None

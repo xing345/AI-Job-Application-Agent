@@ -1,0 +1,54 @@
+﻿2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Logging initialized: level=20 file=D:\x\ai agent\logs\agent_2026-10-13_23-09-37.log run_id=b26cee74
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | === 自动求职 Agent 启动 | session=b26cee74 ===
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | DB initialized: version=4 path=D:\x\ai agent\data\agent_state.db
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Database ready
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Browser started: profile=D:\x\ai agent\data\browser_profile_mihoyo, headless=False
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Browser ready
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Profile loaded: data/user_profile.json
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Resume loaded: data/resume.pdf
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Direct job URLs specified, skipping discovery
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Fetching 3 job details...
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | JD fetch complete: 3/3 succeeded (3 from cache, 0 newly fetched)
+[缓存复用] 3/3 个岗位 JD 从本地缓存加载，无需重新抓取
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Matching 3 jobs with resume (len=2224)...
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Match report saved: D:\x\ai agent\output\match_report_20261013_230937.json
+2026-10-13 23:09:37 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Match complete: 3/3 succeeded (3 from cache), top score=82
+[缓存复用] 3/3 个岗位匹配结果从本地缓存加载，无需重新调用大模型
+
+==============================================================================================================
+序号   分数     方向    硬性      岗位                                     公司               地点        
+--------------------------------------------------------------------------------------------------------------
+0    88     Y     7/7     基础研究-游戏AI研发工程师（Agent方向）                米哈游              上海        
+1    82     Y     4/5     平台研发-Agent开发工程师                        米哈游              上海        
+2    82     Y     5/6     基础研究-Agent 算法研究员                       米哈游              上海        
+==============================================================================================================
+
+【匹配理由 Top3】
+
+  [0] 基础研究-游戏AI研发工程师（Agent方向） (分数: 88)
+      理由: 硬性要求满足7/7条，加分项满足2/3条。候选人软件工程本科2027届，与岗位面向对象一致；具备扎实的Python/Java/TypeScript/C++编程能力，深度实践LangGraph、Deep Agents、Tool Calling、RAG、Hybrid Retrieval、Checkpoi
+      缺失: [加分] 有游戏AI、虚拟角色、互动叙事、NPC系统或智能交互相关经验：简历无直接游戏AI项目经验; [加分] 熟悉Unity、Unreal或常见游戏研发流程：简历未提及游戏引擎或游戏研发流程经验
+
+  [1] 平台研发-Agent开发工程师 (分数: 82)
+      理由: 硬性要求满足4/5条，加分项满足2条。岗位方向与候选人目标高度匹配，且候选人具备丰富的Agent开发经验（LangGraph、Deep Agents、Tool Calling等），与岗位职责中的Agent调度、工具调用、系统融合等高度契合。主要不足在于硬性要求中Go/C++/Rust的熟练掌握程度未
+      缺失: [硬性] 熟练掌握Go/C++/Rust至少一门（简历中C/C++仅列出，无项目证明，主要使用Python/Java）
+
+  [2] 基础研究-Agent 算法研究员 (分数: 82)
+      理由: 硬性要求满足5/6条（学历本科符合'优秀本科生亦可'，但未体现大模型对齐/强化学习训练经验），加分项满足2条。岗位方向为Agent算法研究，与候选人AI Agent开发目标高度匹配，direction_match=true。候选人具备丰富的Agent应用开发经验（LangGraph、Deep Age
+      缺失: [硬性] 硕士及以上学历（候选人为本科，但JD注明优秀本科生亦可，故视为部分满足）; [硬性] 了解SFT、DPO、RLHF、RLAIF、PPO、GRPO等大模型对齐或强化学习方法中的一种或多种，有实际项目经验者优先（简历未体现相关训练/对齐经验）; [加分] 有智能NPC、角色扮演、开放域对话、交互叙事、AI游戏玩法等相关项目或实习经历
+
+请选择要投递的岗位：
+  - 输入序号（多个用逗号分隔，如: 0,2,5）
+  - 输入 all 投递全部
+  - 输入 URL 直接指定岗位（跳过发现/匹配）
+  - 输入 quit 退出
+> 已取消投递
+
+============================================================
+=== 运行结束 ===
+会话 ID: b26cee74
+匹配结果: 3 个岗位
+最高匹配: 基础研究-游戏AI研发工程师（Agent方向） (88分)
+============================================================
+2026-10-13 23:09:38 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Browser stopped
+2026-10-13 23:09:38 | INFO    | run=-        | node=-                | job=-                    | event=-                    | Browser closed

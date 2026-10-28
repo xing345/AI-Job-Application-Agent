@@ -100,6 +100,22 @@ class BlockHandler:
             # 有密码框就大概率是登录页
             return "检测到登录墙（密码输入框）"
 
+        # 2.5 登录页（扫码 / 社交账号登录，可能没有密码框，如腾讯 QQ/微信扫码）
+        try:
+            cur_url = page.url.lower()
+            body_text = await page.locator("body").inner_text()
+            url_is_login = any(k in cur_url for k in
+                               ["login.html", "/login", "signin", "sign-in", "oauth"])
+            social_login = any(k in body_text for k in
+                               ["qq账号登录", "微信账号登录", "扫码登录", "扫一扫登录",
+                                "使用社交账号一键登录", "社交账号登录"])
+            if url_is_login and ("登录" in body_text or social_login):
+                return "检测到登录页（需账号/扫码登录）"
+            if social_login:
+                return "检测到登录页（社交/扫码登录）"
+        except Exception:
+            pass
+
         # 3. 页面文本关键词检测（验证码/403）
         try:
             body_text = await page.locator("body").inner_text()

@@ -1,0 +1,232 @@
+- generic [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - heading [level=1] [ref=e8]:
+        - link [ref=e9] [cursor=pointer]:
+          - /url: /campus/
+          - img [ref=e10]:
+            - generic [ref=e12]: 校招
+      - generic [ref=e28]:
+        - link "首页" [ref=e31] [cursor=pointer]:
+          - /url: /campus/
+        - generic [ref=e32] [cursor=pointer]: 技术人才项目
+        - link "职位" [ref=e37] [cursor=pointer]:
+          - /url: /campus/position
+        - link "招聘动态" [ref=e40] [cursor=pointer]:
+          - /url: /campus/page-6272Gc
+        - link "产品与技术" [ref=e43] [cursor=pointer]:
+          - /url: /campus/page-AgCQiO
+        - link "成长与回报" [ref=e46] [cursor=pointer]:
+          - /url: /campus/page-3pEJ9S
+      - generic [ref=e47]:
+        - link "社会招聘" [ref=e50] [cursor=pointer]:
+          - /url: //jobs.bytedance.com
+        - generic [ref=e51]: 156******26
+    - generic [ref=e54]:
+      - main [ref=e67]:
+        - generic [ref=e70]:
+          - generic [ref=e72]:
+            - generic [ref=e76]:
+              - generic [ref=e77]: AI应用研发工程师 - IT
+              - alert [ref=e631]:
+                - generic [ref=e637]:
+                  - generic [ref=e640]:
+                    - generic [ref=e641]: 在 2026-08-03 至 2026-12-31 期间、“2027届校园招聘”招聘项目中，你通过官网、内推渠道最多可以投递 2 次，还可以投递 2 次 。
+                    - generic [ref=e642] [cursor=pointer]
+                  - button "查看应聘记录" [ref=e648] [cursor=pointer]
+              - generic [ref=e81]:
+                - generic [ref=e82]:
+                  - generic [ref=e83]:
+                    - paragraph [ref=e85]: 申请信息
+                    - paragraph
+                  - generic [ref=e87]:
+                    - generic [ref=e88]:
+                      - generic [ref=e89]: 内推码
+                      - generic [ref=e95]:
+                        - textbox [ref=e99]:
+                          - /placeholder: 请输入内推码
+                        - paragraph [ref=e100]:
+                          - paragraph [ref=e101]: 字节跳动不会以任何形式进行付费内推，也绝不会以任何名义向应聘者收取任何费用，请谨防受骗。
+                    - generic [ref=e102]:
+                      - generic [ref=e105]:
+                        - text: 意向城市
+                        - generic [ref=e106]: "*"
+                      - generic [ref=e109]:
+                        - generic [ref=e110]: 最多可选 3 个城市
+                        - combobox [expanded] [ref=e112]:
+                          - generic [ref=e113]:
+                            - generic [ref=e114]: 请选择意向城市
+                            - list:
+                              - listitem [ref=e115]:
+                                - textbox [active] [ref=e117]
+                - generic [ref=e122]:
+                  - generic [ref=e123]:
+                    - paragraph [ref=e125]: 简历
+                    - paragraph
+                  - generic [ref=e132]:
+                    - 'button "resume.pdf 上次上传: 2026-10-25 19:38 更新 删除" [ref=e669]':
+                      - generic [ref=e671]:
+                        - paragraph [ref=e677]: resume.pdf
+                        - generic [ref=e678]: "上次上传: 2026-10-25 19:38"
+                        - generic [ref=e679]: 更新删除
+                    - generic [ref=e681]:
+                      - paragraph [ref=e685]: 将简历内容解析到下方表单？
+                      - generic [ref=e686] [cursor=pointer]: 解析并覆盖
+                      - generic [ref=e687] [cursor=pointer]
+                - generic [ref=e142]:
+                  - generic [ref=e143]:
+                    - paragraph [ref=e145]: 基本信息
+                    - paragraph [ref=e146]: 请填写基本信息
+                  - generic [ref=e148]:
+                    - generic [ref=e149]:
+                      - generic [ref=e152]:
+                        - text: 姓名
+                        - generic [ref=e153]: "*"
+                      - textbox [ref=e160]: 张亚辉
+                    - generic [ref=e161]:
+                      - generic [ref=e164]:
+                        - text: 手机号码
+                        - generic [ref=e165]: "*"
+                      - generic [ref=e169]:
+                        - generic [ref=e172]:
+                          - generic [ref=e173]: "+86"
+                          - generic:
+                            - combobox
+                        - textbox [ref=e181]: "15638108926"
+                    - generic [ref=e182]:
+                      - generic [ref=e185]:
+                        - text: 邮箱
+                        - generic [ref=e186]: "*"
+                      - textbox [ref=e193]: 313206376@qq.com
+                    - generic [ref=e194]:
+                      - generic [ref=e197]:
+                        - text: 个人证件
+                        - generic [ref=e198]: "*"
+                      - generic [ref=e202]:
+                        - generic [ref=e205] [cursor=pointer]:
+                          - generic [ref=e206]: 中国 - 居民身份证
+                          - generic:
+                            - combobox
+                        - textbox [ref=e214]
+                    - generic [ref=e215]:
+                      - generic [ref=e216]: 期望工作地点
+                      - combobox [ref=e229]
+                - generic [ref=e234]:
+                  - generic [ref=e235]:
+                    - paragraph [ref=e237]: 教育经历
+                    - paragraph [ref=e238]: 请填写教育经历
+                  - generic [ref=e244]:
+                    - generic [ref=e246]:
+                      - generic [ref=e247]:
+                        - generic [ref=e250]:
+                          - text: 起止时间
+                          - generic [ref=e251]: "*"
+                        - generic [ref=e252]: 无准确的毕业时间可填写预计毕业时间
+                        - generic [ref=e256]:
+                          - textbox [ref=e261]
+                          - textbox [ref=e272]
+                      - generic [ref=e277]:
+                        - generic [ref=e280]:
+                          - text: 学历类型
+                          - generic [ref=e281]: "*"
+                        - generic [ref=e287] [cursor=pointer]:
+                          - generic:
+                            - combobox
+                      - generic [ref=e293]:
+                        - generic [ref=e296]:
+                          - text: 学校名称
+                          - generic [ref=e297]: "*"
+                        - textbox [ref=e306]
+                      - generic [ref=e307]:
+                        - generic [ref=e310]:
+                          - text: 学历
+                          - generic [ref=e311]: "*"
+                        - generic [ref=e317] [cursor=pointer]:
+                          - generic:
+                            - combobox
+                      - generic [ref=e323]:
+                        - generic [ref=e326]:
+                          - text: 学院
+                          - generic [ref=e327]: "*"
+                        - textbox [ref=e334]
+                      - generic [ref=e335]:
+                        - generic [ref=e338]:
+                          - text: 专业
+                          - generic [ref=e339]: "*"
+                        - textbox [ref=e346]
+                      - generic [ref=e347]:
+                        - generic [ref=e348]: 实验室
+                        - textbox [ref=e357]
+                      - generic [ref=e358]:
+                        - generic [ref=e359]: 领域方向
+                        - textbox [ref=e368]
+                      - generic [ref=e369]:
+                        - generic [ref=e370]: 导师
+                        - textbox [ref=e379]
+                    - button [ref=e381] [cursor=pointer]
+                - generic [ref=e386]:
+                  - paragraph [ref=e389]: 实习经历
+                  - generic [ref=e391]:
+                    - checkbox "没有实习经历" [checked] [ref=e393] [cursor=pointer]
+                    - generic [ref=e397] [cursor=pointer]: 没有实习经历
+                - generic [ref=e398]:
+                  - paragraph [ref=e401]: 工作经历
+                  - button [ref=e407] [cursor=pointer]
+                - generic [ref=e412]:
+                  - paragraph [ref=e415]: 项目经历
+                  - button [ref=e421] [cursor=pointer]
+                - generic [ref=e426]:
+                  - paragraph [ref=e429]: 作品
+                  - button [ref=e435] [cursor=pointer]
+                - generic [ref=e440]:
+                  - paragraph [ref=e443]: 竞赛
+                  - button [ref=e449] [cursor=pointer]
+                - generic [ref=e454]:
+                  - paragraph [ref=e457]: 证书
+                  - button [ref=e463] [cursor=pointer]
+                - generic [ref=e468]:
+                  - paragraph [ref=e471]: 语言能力
+                  - button [ref=e477] [cursor=pointer]
+                - generic [ref=e482]:
+                  - paragraph [ref=e485]: 自我评价
+                  - button [ref=e491] [cursor=pointer]
+                - generic [ref=e496]:
+                  - paragraph [ref=e499]: 社交账号
+                  - button [ref=e505] [cursor=pointer]
+              - listbox [ref=e514]:
+                - option "北京" [ref=e515] [cursor=pointer]
+                - option "深圳" [ref=e520] [cursor=pointer]
+            - generic [ref=e528]:
+              - generic [ref=e533]:
+                - checkbox "我已阅读并同意隐私政策" [ref=e536] [cursor=pointer]
+                - generic [ref=e538] [cursor=pointer]: 我已阅读并同意隐私政策
+              - button "提交简历" [ref=e539] [cursor=pointer]
+          - generic [ref=e543]:
+            - generic [ref=e545]:
+              - generic [ref=e546] [cursor=pointer]
+              - generic [ref=e550] [cursor=pointer]
+              - generic [ref=e554] [cursor=pointer]
+              - generic [ref=e558] [cursor=pointer]
+            - generic [ref=e562]: 联系我们
+            - generic [ref=e568]: 相关网站
+            - button "候选人反馈平台" [ref=e576] [cursor=pointer]
+            - button "官网使用体验反馈" [ref=e580] [cursor=pointer]
+            - button "字节跳动" [ref=e584] [cursor=pointer]
+            - button "社会招聘" [ref=e588] [cursor=pointer]
+            - button "全球招聘" [ref=e592] [cursor=pointer]
+            - button "字节跳动 Seed 团队" [ref=e596] [cursor=pointer]
+            - img [ref=e601] [cursor=pointer]
+            - generic [ref=e615] [cursor=pointer]
+            - generic [ref=e620] [cursor=pointer]
+      - complementary:
+        - generic:
+          - generic:
+            - generic:
+              - button "打开 AI 助手" [ref=e510] [cursor=pointer]
+              - generic [aria-hidden]:
+                - generic:
+                  - generic:
+                    - generic [aria-hidden]: 👋
+                    - generic: Hi，有什么可以帮你？
+                  - paragraph: 我可以推荐岗位、查询投递进度、解答招聘相关问题。想从哪个开始？
+  - generic: 上传成功

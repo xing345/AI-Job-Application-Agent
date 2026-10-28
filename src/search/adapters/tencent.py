@@ -6,7 +6,9 @@
 """
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 from typing import List, Optional
 
 from playwright.async_api import Page
@@ -33,9 +35,14 @@ class TencentAdapter(SiteAdapter):
     page_size = 10
     max_jobs_hard_limit = 1000
 
-    RESP_KEYWORDS = ["岗位描述", "岗位职责", "工作职责", "工作内容"]
-    REQ_KEYWORDS = ["岗位要求", "任职要求", "任职资格"]
+    RESP_KEYWORDS = ["岗位描述", "岗位职责", "工作职责", "工作内容", "课题描述"]
+    REQ_KEYWORDS = ["岗位要求", "任职要求", "任职资格", "课题要求"]
     BONUS_KEYWORDS = ["加分项", "加分", "注意事项"]
+    # 正文结束锚点（要求/职责段落之后的页面区块，用于截断噪声）
+    STOP_KEYWORDS = [
+        "参加面试的城市", "课题部门", "工作地", "投递简历", "关注腾讯",
+        "相关推荐", "相关岗位", "面试城市", "工作地点",
+    ]
 
     def __init__(self, config: SiteConfig):
         super().__init__(config)
@@ -142,26 +149,33 @@ class TencentAdapter(SiteAdapter):
         try:
             await page.goto(posting.detail_url, wait_until="domcontentloaded", timeout=30000)
             # 等待JD内容渲染
-            title = ""
             full_text = ""
+            lines: List[str] = []
+            valid = False
             for attempt in range(3):
                 await page.wait_for_timeout(2500)
                 body = await page.locator("body").inner_text()
                 lines = [l.strip() for l in body.split("\n") if l.strip()]
-                title, full_text = self._parse_detail_lines(lines)
-                if title and self._has_jd_keywords(full_text):
+                _, full_text = self._parse_detail_lines(lines)
+                # 校验：含 岗位/课题 关键词，且页面包含列表 API 权威标题（防宣传页/失效岗串岗）
+                if full_text and self._has_jd_keywords(full_text) and self._page_has_title(lines, posting.title):
+                    valid = True
                     break
-                logger.debug("Tencent detail attempt %d: title=%s jd_len=%d", attempt + 1, bool(title), len(full_text))
+                logger.debug("Tencent detail attempt %d: jd_len=%d has_kw=%s has_title=%s",
+                             attempt + 1, len(full_text),
+                             self._has_jd_keywords(full_text),
+                             self._page_has_title(lines, posting.title))
 
-            if not full_text:
-                logger.warning("Tencent JD empty after retries: %s", posting.detail_url)
+            if not valid:
+                logger.warning("Tencent JD 无效/标题不符: 期望='%s' url=%s",
+                               posting.title, posting.detail_url)
                 return None
 
             location = posting.location
             responsibilities, requirements, bonus = self._split_jd_sections(full_text)
 
             enhanced_posting = JobPosting(
-                title=title or posting.title,
+                title=posting.title,  # 统一用列表 API 权威标题，避免页面标题错误
                 company=self.company_name,
                 location=location,
                 detail_url=posting.detail_url,
@@ -182,6 +196,26 @@ class TencentAdapter(SiteAdapter):
         except Exception as e:
             logger.warning("Tencent extract_jd_detail failed: %s", e)
             return None
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", "", s or "")
+
+    def _page_has_title(self, lines: List[str], expected: str) -> bool:
+        """页面是否包含列表 API 权威标题（规范化后子串匹配，兼容普通岗与青云课题）。"""
+        et = self._norm(expected)
+        if not et:
+            return False
+        return any(et in self._norm(line) for line in lines)
+
+    @staticmethod
+    def _titles_match(t1: str, t2: str, threshold: float = 0.6) -> bool:
+        """标题一致性校验（规范化后相似度≥阈值），备用。"""
+        if not t1 or not t2:
+            return False
+        a = re.sub(r"\s+", "", t1)
+        b = re.sub(r"\s+", "", t2)
+        return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
 
     def _parse_detail_lines(self, lines: List[str]) -> tuple[str, str]:
         """从详情页文本行中提取标题和JD正文。
@@ -237,6 +271,10 @@ class TencentAdapter(SiteAdapter):
                     return i
             return -1
 
+        def next_stop(start: int) -> int:
+            idx = find_idx(self.STOP_KEYWORDS, start)
+            return idx if idx >= 0 else len(lines)
+
         resp_idx = find_idx(self.RESP_KEYWORDS)
         req_idx = find_idx(self.REQ_KEYWORDS, resp_idx + 1 if resp_idx >= 0 else 0)
         bonus_idx = find_idx(self.BONUS_KEYWORDS, req_idx + 1 if req_idx >= 0 else 0)
@@ -245,14 +283,24 @@ class TencentAdapter(SiteAdapter):
         requirements = ""
         bonus = ""
 
+        # 职责 / 课题描述：到 要求段、加分项或结束锚点（取最近）
         if resp_idx >= 0:
-            end = req_idx if req_idx > resp_idx else (bonus_idx if bonus_idx > resp_idx else len(lines))
-            responsibilities = "\n".join(lines[resp_idx + 1:end]).strip()
+            ends = [next_stop(resp_idx + 1)]
+            if req_idx > resp_idx:
+                ends.append(req_idx)
+            if bonus_idx > resp_idx:
+                ends.append(bonus_idx)
+            responsibilities = "\n".join(lines[resp_idx + 1:min(ends)]).strip()
+
+        # 要求 / 课题要求：到 加分项或结束锚点
         if req_idx >= 0:
-            end = bonus_idx if bonus_idx > req_idx else len(lines)
-            requirements = "\n".join(lines[req_idx + 1:end]).strip()
+            ends = [next_stop(req_idx + 1)]
+            if bonus_idx > req_idx:
+                ends.append(bonus_idx)
+            requirements = "\n".join(lines[req_idx + 1:min(ends)]).strip()
+
         if bonus_idx >= 0:
-            bonus = "\n".join(lines[bonus_idx + 1:]).strip()
+            bonus = "\n".join(lines[bonus_idx + 1:next_stop(bonus_idx + 1)]).strip()
 
         # 加分项并入要求文本（供匹配使用）
         if bonus and requirements:

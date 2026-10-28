@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import List
 
 
@@ -132,12 +133,21 @@ def fill_fields_prompt(
         "规则：\n"
         "1. 看 label 文本判断字段含义，不依赖 name 属性。\n"
         "2. 从简历和画像中提取对应值。\n"
-        "3. 开放式问题（为什么加入我们、个人优势、自我介绍等）必须结合 JD 中的具体要求生成针对性回答，"
-        "不要用通用模板。\n"
-        "4. 不确定的字段填 null，不要编造。\n"
-        "5. select/radio 字段，value 必须是 options 中的一个精确值。\n"
-        "6. 只输出 JSON，字段顺序与输入一致。"
+        "3. 开放式问题（为什么加入我们、个人优势、自我介绍、AI 协作经历、常用 AI 工具等）"
+        "必须结合 JD 中的具体要求和候选人真实项目生成针对性回答，不要用通用模板。\n"
+        "4. 简历/画像中确实没有、也无法合理推断的字段填 null，不要编造"
+        "（如论文、导师、紧急联系人、个人照片等）。\n"
+        "5. 对 type 为 select/combobox/radio 的字段，value 必须严格等于该字段 options 中"
+        "列出的某一项的完整文本；options 为空时再按语义填写。\n"
+        "6. 必须为输入字段列表中的【每一个】字段输出一条记录，index 与输入一一对应、"
+        "顺序一致，不得遗漏、合并或新增。\n"
+        "7. 只输出 JSON。"
     )
+
+    try:
+        n_fields = len(json.loads(fields_json))
+    except Exception:
+        n_fields = None
 
     user = (
         f"【岗位标题】{job_title}\n\n"
@@ -145,7 +155,9 @@ def fill_fields_prompt(
         f"【候选人画像】\n{profile_summary}\n\n"
         f"【候选人简历】\n{resume_text}\n\n"
         f"【表单字段列表（JSON）】\n{fields_json}\n\n"
-        "请为每个字段输出：{\"fields\": [{\"index\": 序号, \"semantic_type\": 语义分类, \"value\": 填写值或null}]}"
+        f"请为上述每个字段（共 {n_fields} 个）输出："
+        "{\"fields\": [{\"index\": 序号, \"semantic_type\": 语义分类, \"value\": 填写值或null}]}，"
+        f"fields 数组必须恰好包含 {n_fields} 条。"
     )
 
     return [

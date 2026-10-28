@@ -1,0 +1,98 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - heading [level=1] [ref=e8]:
+        - link [ref=e9] [cursor=pointer]:
+          - /url: /campus/
+          - img [ref=e10]:
+            - generic [ref=e12]: 校招
+      - generic [ref=e28]:
+        - link "首页" [ref=e31] [cursor=pointer]:
+          - /url: /campus/
+        - generic [ref=e32] [cursor=pointer]: 技术人才项目
+        - link "职位" [ref=e37] [cursor=pointer]:
+          - /url: /campus/position
+        - link "招聘动态" [ref=e40] [cursor=pointer]:
+          - /url: /campus/page-6272Gc
+        - link "产品与技术" [ref=e43] [cursor=pointer]:
+          - /url: /campus/page-AgCQiO
+        - link "成长与回报" [ref=e46] [cursor=pointer]:
+          - /url: /campus/page-3pEJ9S
+      - generic [ref=e47]:
+        - link "社会招聘" [ref=e50] [cursor=pointer]:
+          - /url: //jobs.bytedance.com
+        - link "登录" [ref=e53] [cursor=pointer]:
+          - /url: /campus/login
+    - generic [ref=e54]:
+      - main [ref=e55]:
+        - generic [ref=e57]:
+          - generic [ref=e65]:
+            - generic [ref=e66]:
+              - generic [ref=e67] [cursor=pointer]: 手机号码登录
+              - generic [ref=e68] [cursor=pointer]: 邮箱登录
+            - generic [ref=e70]:
+              - generic [ref=e71]:
+                - generic [ref=e77]:
+                  - combobox [ref=e79] [cursor=pointer]
+                  - textbox "手机号码" [ref=e86]
+                - generic [ref=e92]:
+                  - textbox "验证码" [ref=e93]
+                  - button "获取验证码" [disabled] [ref=e95]
+              - button "登录" [ref=e96] [cursor=pointer]
+              - generic [ref=e97]: 未注册的手机号码验证后将自动创建账号
+              - generic [ref=e98]:
+                - paragraph [ref=e99]: 第三方账号快速登录
+                - generic [ref=e100]:
+                  - generic [ref=e101] [cursor=pointer]
+                  - generic [ref=e106] [cursor=pointer]
+                  - generic [ref=e111] [cursor=pointer]
+                  - generic [ref=e116] [cursor=pointer]
+              - generic [ref=e125]:
+                - checkbox [ref=e128] [cursor=pointer]
+                - text: 同意并阅读 用户协议 与 求职者个人信息保护指引
+          - generic [ref=e133]:
+            - generic [ref=e135]:
+              - generic [ref=e136] [cursor=pointer]
+              - generic [ref=e140] [cursor=pointer]
+              - generic [ref=e144] [cursor=pointer]
+              - generic [ref=e148] [cursor=pointer]
+            - generic [ref=e152]: 联系我们
+            - generic [ref=e158]: 相关网站
+            - button "候选人反馈平台" [ref=e166] [cursor=pointer]
+            - button "官网使用体验反馈" [ref=e170] [cursor=pointer]
+            - button "字节跳动" [ref=e174] [cursor=pointer]
+            - button "社会招聘" [ref=e178] [cursor=pointer]
+            - button "全球招聘" [ref=e182] [cursor=pointer]
+            - button "字节跳动 Seed 团队" [ref=e186] [cursor=pointer]
+            - img [ref=e191] [cursor=pointer]
+            - generic [ref=e205] [cursor=pointer]
+            - generic [ref=e210] [cursor=pointer]
+      - complementary:
+        - generic:
+          - generic:
+            - generic:
+              - button "打开 AI 助手" [ref=e221] [cursor=pointer]
+              - generic [aria-hidden]:
+                - generic:
+                  - generic:
+                    - generic [aria-hidden]: 👋
+                    - generic: Hi，有什么可以帮你？
+                  - paragraph: 我可以推荐岗位、查询投递进度、解答招聘相关问题。想从哪个开始？
+  - dialog [ref=e224]:
+    - generic [ref=e225]:
+      - generic [ref=e226]:
+        - heading "你的 AI 求职搭子来了" [level=2] [ref=e227]:
+          - generic [ref=e228]: 你的
+          - generic [ref=e229]: AI 求职搭子来了
+        - paragraph [ref=e230]: 政策流程不了解、岗位不知道怎么选，一个入口全搞定
+      - button "关闭引导" [ref=e231] [cursor=pointer]
+    - generic [ref=e235]:
+      - generic [ref=e236]:
+        - strong [ref=e241]: 线上咨询
+        - generic [ref=e242]: 政策、流程随时问，回答迅速又靠谱
+      - generic [ref=e243]:
+        - strong [ref=e248]: 个性化荐岗
+        - generic [ref=e249]: 上传简历、表达意向，秒懂并推荐你适合的岗位
+    - contentinfo [ref=e250]:
+      - button "稍后再说" [ref=e251] [cursor=pointer]
+      - button "立即体验" [ref=e252] [cursor=pointer]

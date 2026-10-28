@@ -7,6 +7,7 @@ Tavily 关键词搜索默认关闭。
 from __future__ import annotations
 
 import logging
+import os
 from typing import List
 
 from src.agent.state import AgentState
@@ -16,6 +17,17 @@ from src.search.site_registry import get_site_config
 from src.storage import state_db
 
 logger = logging.getLogger(__name__)
+
+
+def _posting_from_row(row: dict, site_name: str) -> JobPosting:
+    return JobPosting(
+        title=row.get("job_title") or "",
+        company=row.get("company") or "",
+        location=row.get("location") or "",
+        detail_url=row["job_url"],
+        category_path=row.get("category_path") or "",
+        site_name=row.get("site_name") or site_name,
+    )
 
 
 async def run(state: AgentState) -> AgentState:
@@ -31,6 +43,17 @@ async def run(state: AgentState) -> AgentState:
         return state
 
     logger.info("Discovering jobs from: %s", site_name)
+
+    # 缓存复用：非 --refresh 且库中已有该站点岗位时，直接加载，跳过浏览器发现
+    refresh = os.environ.get("JOB_AGENT_REFRESH", "").strip() == "1"
+    if not refresh:
+        cached_rows = await state_db.get_site_job_postings(site_name)
+        if cached_rows:
+            cached_jobs = [_posting_from_row(r, site_name) for r in cached_rows]
+            state.discovered_jobs = cached_jobs
+            logger.info("Loaded %d jobs from cache (site=%s)", len(cached_jobs), site_name)
+            print(f"\n[岗位发现] 从本地缓存加载 {len(cached_jobs)} 个岗位（加 --refresh 强制重新发现）")
+            return state
 
     try:
         jobs: List[JobPosting] = await do_discover(config)
@@ -60,6 +83,9 @@ async def run(state: AgentState) -> AgentState:
                 location=job.location,
                 category_path=job.category_path,
             )
+
+        # 实际重新发现后，重置初筛标记，强制重新初筛（岗位列表可能已变化）
+        await state_db.reset_screen_flags(site_name)
 
         state.discovered_jobs = unique
         logger.info("Discovered %d unique jobs from %s (new=%d, seen=%d) run_id=%s",

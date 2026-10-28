@@ -1,0 +1,42 @@
+- generic [ref=e4]:
+  - generic [ref=e7]:
+    - heading [level=1] [ref=e8]:
+      - link [ref=e9] [cursor=pointer]:
+        - /url: /campus/
+        - img [ref=e10]:
+          - generic [ref=e12]: 校招
+    - generic [ref=e28]:
+      - link "首页" [ref=e31] [cursor=pointer]:
+        - /url: /campus/
+      - generic [ref=e32] [cursor=pointer]: 技术人才项目
+      - link "职位" [ref=e37] [cursor=pointer]:
+        - /url: /campus/position
+      - link "招聘动态" [ref=e40] [cursor=pointer]:
+        - /url: /campus/page-6272Gc
+      - link "产品与技术" [ref=e43] [cursor=pointer]:
+        - /url: /campus/page-AgCQiO
+      - link "成长与回报" [ref=e46] [cursor=pointer]:
+        - /url: /campus/page-3pEJ9S
+    - generic [ref=e47]:
+      - link "社会招聘" [ref=e50] [cursor=pointer]:
+        - /url: //jobs.bytedance.com
+      - link "登录" [ref=e53] [cursor=pointer]:
+        - /url: /campus/login
+  - main [ref=e55]
+  - generic [ref=e59]:
+    - generic [ref=e61]:
+      - generic [ref=e62] [cursor=pointer]
+      - generic [ref=e66] [cursor=pointer]
+      - generic [ref=e70] [cursor=pointer]
+      - generic [ref=e74] [cursor=pointer]
+    - generic [ref=e78]: 联系我们
+    - generic [ref=e84]: 相关网站
+    - button "候选人反馈平台" [ref=e92] [cursor=pointer]
+    - button "官网使用体验反馈" [ref=e96] [cursor=pointer]
+    - button "字节跳动" [ref=e100] [cursor=pointer]
+    - button "社会招聘" [ref=e104] [cursor=pointer]
+    - button "全球招聘" [ref=e108] [cursor=pointer]
+    - button "字节跳动 Seed 团队" [ref=e112] [cursor=pointer]
+    - img [ref=e117] [cursor=pointer]
+    - generic [ref=e131] [cursor=pointer]
+    - generic [ref=e136] [cursor=pointer]

@@ -51,6 +51,7 @@ class AgentState(BaseModel):
     # 运行配置
     site_name: str = ""
     job_urls: List[str] = Field(default_factory=list)  # 手动指定的岗位 URL（跳过发现）
+    apply_url: str = ""  # 直达填表链接：直接打开并填表，跳过发现/初筛/匹配
     resume_path: str = ""
     profile_path: str = ""
 

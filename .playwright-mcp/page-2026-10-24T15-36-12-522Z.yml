@@ -1,0 +1,243 @@
+- generic [ref=e4]:
+  - generic [ref=e7]:
+    - heading [level=1] [ref=e8]:
+      - link [ref=e9] [cursor=pointer]:
+        - /url: /campus/
+        - img [ref=e10]:
+          - generic [ref=e12]: 校招
+    - generic [ref=e28]:
+      - link "首页" [ref=e31] [cursor=pointer]:
+        - /url: /campus/
+      - generic [ref=e32] [cursor=pointer]: 技术人才项目
+      - link "职位" [ref=e37] [cursor=pointer]:
+        - /url: /campus/position
+      - link "招聘动态" [ref=e40] [cursor=pointer]:
+        - /url: /campus/page-6272Gc
+      - link "产品与技术" [ref=e43] [cursor=pointer]:
+        - /url: /campus/page-AgCQiO
+      - link "成长与回报" [ref=e46] [cursor=pointer]:
+        - /url: /campus/page-3pEJ9S
+    - generic [ref=e47]:
+      - link "社会招聘" [ref=e50] [cursor=pointer]:
+        - /url: //jobs.bytedance.com
+      - generic [ref=e51]: 156******26
+  - generic [ref=e54]:
+    - main [ref=e55]:
+      - generic [ref=e152]:
+        - generic [ref=e156]:
+          - generic [ref=e162]:
+            - textbox "AI 职位搜索" [active] [ref=e166]:
+              - /placeholder: 推荐适合我的岗位
+              - text: "15638108926"
+            - button "搜索" [ref=e168] [cursor=pointer]
+          - generic [ref=e171]:
+            - generic [ref=e174]:
+              - generic [ref=e191] [cursor=pointer]
+              - generic [ref=e744]: 请刷新试试
+            - generic [ref=e195]: 字节跳动的使命是“激发创造，丰富生活”。我们因使命而驱动，希望吸引认同我们的人加入，一起激发更多人的创造。
+        - generic [ref=e203]:
+          - generic [ref=e204]: 招聘项目
+          - generic [ref=e208]:
+            - button "一键投递" [ref=e216] [cursor=pointer]
+            - button "一键投递" [ref=e225] [cursor=pointer]
+            - button "一键投递" [ref=e234] [cursor=pointer]
+            - button "一键投递" [ref=e243] [cursor=pointer]
+        - generic [ref=e250]:
+          - generic [ref=e251]: 字节范 ByteStyle
+          - generic [ref=e253]: 字节范是 ByteDancer 在追求使命、达成愿景的过程中共享的工作风格和方法
+          - generic [ref=e254]:
+            - generic [ref=e256]:
+              - generic [ref=e263]:
+                - generic [ref=e264]: 始终创业
+                - generic [ref=e266]: 保持创业心态，始终开创而不守成，创新而非依赖资源 敏捷有效，最简化流程，避免简单事情复杂化 对外敏锐谦逊，避免自满或优越感
+              - generic [ref=e274]:
+                - generic [ref=e275]: 坦诚清晰
+                - generic [ref=e277]: 表达真实想法，不怕暴露问题，反对“向上管理” 准确、简洁、直接，少用抽象、模糊、空泛的词 就事论事，理性沟通，避免主观臆测和情绪化表达
+              - generic [ref=e285]:
+                - generic [ref=e286]: 多元兼容
+                - generic [ref=e288]: 欣赏个体多样性，聚焦人的核心特质 全球视角，理解不同文化、观点和实践 善意假设，默认开放信任，有效合作
+              - generic [ref=e296]:
+                - generic [ref=e297]: 求真务实
+                - generic [ref=e299]: 独立思考，刨根问底，找到本质 直接体验，深入事实，拿一手数据或信息 不自嗨，注重实际效果
+              - generic [ref=e307]:
+                - generic [ref=e308]: 敢为极致
+                - generic [ref=e310]: 敢于为了更好的结果明智地冒险，注重整体 ROI 尝试多种可能性，在更大范围里找最优解 追求卓越，高标准，不仅做了，更要做好
+              - generic [ref=e318]:
+                - generic [ref=e319]: 共同成长
+                - generic [ref=e321]: 相信并认可使命和愿景，基于使命愿景自驱 面对短期波动有耐心、有韧性，共同解决问题 持续学习，不设边界，与组织一起成长
+            - generic [ref=e323]:
+              - button "Previous slide" [disabled]
+              - button "Next slide" [ref=e324] [cursor=pointer]
+        - generic [ref=e331]:
+          - generic:
+            - generic [ref=e338]:
+              - generic [ref=e339]:
+                - generic [ref=e340]: 北京
+                - generic [ref=e341]: 上海
+                - generic [ref=e342]: 广州
+                - generic [ref=e343]: 香港
+                - generic [ref=e344]: 新加坡
+                - generic [ref=e345]: 首尔
+                - generic [ref=e346]: 东京
+                - generic [ref=e347]: 悉尼
+                - generic [ref=e348]: 洛杉矶
+                - generic [ref=e349]: 纽约
+                - generic [ref=e350]: 西雅图
+                - generic [ref=e351]: 圣何塞
+                - generic [ref=e352]: 圣保罗
+                - generic [ref=e353]: 伦敦
+                - generic [ref=e354]: 巴黎
+                - generic [ref=e355]: 都柏林
+                - generic [ref=e356]: 约翰内斯堡
+              - generic [ref=e357]:
+                - generic [ref=e358]: 北京
+                - generic [ref=e359]: 上海
+                - generic [ref=e360]: 广州
+                - generic [ref=e361]: 香港
+                - generic [ref=e362]: 新加坡
+                - generic [ref=e363]: 首尔
+                - generic [ref=e364]: 东京
+                - generic [ref=e365]: 悉尼
+                - generic [ref=e366]: 洛杉矶
+                - generic [ref=e367]: 纽约
+                - generic [ref=e368]: 西雅图
+                - generic [ref=e369]: 圣何塞
+                - generic [ref=e370]: 圣保罗
+                - generic [ref=e371]: 伦敦
+                - generic [ref=e372]: 巴黎
+                - generic [ref=e373]: 都柏林
+                - generic [ref=e374]: 约翰内斯堡
+            - generic [ref=e375]:
+              - generic [ref=e376]: Welcome To ByteDance
+              - generic [ref=e377]: Welcome To ByteDance
+            - generic [ref=e378]:
+              - generic [ref=e379]: Welcome To ByteDance
+              - generic [ref=e380]: Welcome To ByteDance
+          - generic [ref=e381]:
+            - generic [ref=e382]: 字节跳动的产品和服务覆盖全球150个国家和地区
+            - generic [ref=e384]: "*以上展示字节跳动部分办公室"
+        - generic [ref=e391]:
+          - generic [ref=e393]:
+            - generic [ref=e394]:
+              - generic [ref=e395]: 字节跳动成立
+              - generic [ref=e398]: 今日头条上线
+              - generic [ref=e401]: 创始团队靠自学写出第一版个性化推荐系统
+            - generic [ref=e403] [cursor=pointer]: "2012"
+            - generic [ref=e406] [cursor=pointer]: "2012"
+          - generic [ref=e410]:
+            - generic [ref=e411]: 今日头条日活跃用户突破 100 万
+            - generic [ref=e415] [cursor=pointer]: "2013"
+            - generic [ref=e418] [cursor=pointer]: "2013"
+          - generic [ref=e422]:
+            - generic [ref=e423]:
+              - generic [ref=e424]: 今日头条日活跃用户突破 1000 万
+              - generic [ref=e427]: 开启大规模机器学习与推荐系统研究
+            - generic [ref=e429] [cursor=pointer]: "2014"
+            - generic [ref=e432] [cursor=pointer]: "2014"
+          - generic [ref=e436]:
+            - generic [ref=e437]: 启动全球化
+            - generic [ref=e440] [cursor=pointer]: "2015"
+            - generic [ref=e443] [cursor=pointer]: "2015"
+          - generic [ref=e447]:
+            - generic [ref=e448]: 抖音上线
+            - generic [ref=e452] [cursor=pointer]: "2016"
+            - generic [ref=e455] [cursor=pointer]: "2016"
+          - generic [ref=e459]:
+            - generic [ref=e460]: TikTok 上线
+            - generic [ref=e464] [cursor=pointer]: "2017"
+            - generic [ref=e467] [cursor=pointer]: "2017"
+          - generic [ref=e471]:
+            - generic [ref=e472]:
+              - generic [ref=e473]: 抖音登顶 App Store
+              - generic [ref=e476]: TikTok 登顶多个国家和地区的 APP 下载榜单
+            - generic [ref=e479] [cursor=pointer]: "2018"
+            - generic [ref=e482] [cursor=pointer]: "2018"
+          - generic [ref=e486]:
+            - generic [ref=e487]:
+              - generic [ref=e488]: 剪映上线
+              - generic [ref=e491]: 飞书正式对外上线
+              - generic [ref=e494]: 番茄小说上线
+              - generic [ref=e497]: 商业品牌巨量引擎发布
+            - generic [ref=e500] [cursor=pointer]: "2019"
+            - generic [ref=e503] [cursor=pointer]: "2019"
+          - generic [ref=e507]:
+            - generic [ref=e508]:
+              - generic [ref=e509]: 推出企业技术服务平台火山引擎
+              - generic [ref=e512]: 抖音电商正式成立
+              - generic [ref=e515]: 开启在科学计算领域的探索
+            - generic [ref=e517] [cursor=pointer]: "2020"
+            - generic [ref=e520] [cursor=pointer]: "2020"
+          - generic [ref=e524]:
+            - generic [ref=e525]:
+              - generic [ref=e526]: 抖音生活服务正式启动
+              - generic [ref=e529]: 收购 PICO，聚焦 XR 技术的长期探索
+            - generic [ref=e532] [cursor=pointer]: "2021"
+            - generic [ref=e535] [cursor=pointer]: "2021"
+          - generic [ref=e539]:
+            - generic [ref=e540]:
+              - generic [ref=e541]: 汽水音乐正式上线
+              - generic [ref=e544]: 开启大语言模型的探索
+            - generic [ref=e546] [cursor=pointer]: "2022"
+            - generic [ref=e549] [cursor=pointer]: "2022"
+          - generic [ref=e553]:
+            - generic [ref=e554]:
+              - generic [ref=e555]: 豆包 App 正式上线
+              - generic [ref=e558]: 红果短剧正式上线
+              - generic [ref=e561]: 抖音寻人帮助超 20000 个家庭团圆
+            - generic [ref=e564] [cursor=pointer]: "2023"
+            - generic [ref=e567] [cursor=pointer]: "2023"
+          - generic [ref=e571]:
+            - generic [ref=e572]:
+              - generic [ref=e573]: 即梦AI 上线
+              - generic [ref=e576]: 豆包大模型正式发布
+              - generic [ref=e578]: 第一颗自研头显专用的消费芯片回片，进入量产阶段
+            - generic [ref=e580] [cursor=pointer]: "2024"
+            - generic [ref=e583] [cursor=pointer]: "2024"
+          - generic [ref=e587]:
+            - generic [ref=e588]:
+              - generic [ref=e589]: 豆包大模型 Seed1.5 发布
+              - generic [ref=e591]: Seedance 1.0 视频生成模型发布
+              - generic [ref=e593]: Seedream 4.0 图像创作模型发布
+            - generic [ref=e595] [cursor=pointer]: "2025"
+            - generic [ref=e598] [cursor=pointer]: "2025"
+          - generic [ref=e602]:
+            - generic [ref=e603]:
+              - generic [ref=e604]: 豆包大模型 Seed2.1 发布
+              - generic [ref=e606]: Seedance 2.5 视频生成模型发布
+              - generic [ref=e608]: Seedream 5.0 Pro 图像创作模型发布
+            - generic [ref=e610] [cursor=pointer]: "2026"
+            - generic [ref=e613] [cursor=pointer]: "2026"
+        - generic [ref=e619]:
+          - generic [ref=e620]: 和优秀的人 做有挑战的事
+          - generic [ref=e622]: 校招生在字节跳动如何成长
+          - generic [ref=e646]:
+            - button "Previous slide" [disabled]
+            - button "Next slide" [ref=e647] [cursor=pointer]
+        - generic [ref=e654]:
+          - generic [ref=e656]:
+            - generic [ref=e657] [cursor=pointer]
+            - generic [ref=e661] [cursor=pointer]
+            - generic [ref=e665] [cursor=pointer]
+            - generic [ref=e669] [cursor=pointer]
+          - generic [ref=e673]: 联系我们
+          - generic [ref=e679]: 相关网站
+          - button "候选人反馈平台" [ref=e687] [cursor=pointer]
+          - button "官网使用体验反馈" [ref=e691] [cursor=pointer]
+          - button "字节跳动" [ref=e695] [cursor=pointer]
+          - button "社会招聘" [ref=e699] [cursor=pointer]
+          - button "全球招聘" [ref=e703] [cursor=pointer]
+          - button "字节跳动 Seed 团队" [ref=e707] [cursor=pointer]
+          - img [ref=e712] [cursor=pointer]
+          - generic [ref=e726] [cursor=pointer]
+          - generic [ref=e731] [cursor=pointer]
+    - complementary:
+      - generic:
+        - generic:
+          - generic:
+            - button "打开 AI 助手" [ref=e742] [cursor=pointer]
+            - generic:
+              - generic:
+                - generic:
+                  - generic [aria-hidden]: 👋
+                  - generic: Hi，有什么可以帮你？
+                - paragraph: 我可以推荐岗位、查询投递进度、解答招聘相关问题。想从哪个开始？

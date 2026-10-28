@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import List, Tuple
 
@@ -20,6 +21,7 @@ from src.llm import client as llm
 from src.llm.prompts import title_screen_prompt
 from src.models.match import TitleScreenResult
 from src.models.job import JobPosting
+from src.storage import state_db
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +168,164 @@ async def screen_batch(titles: List[str], target_directions: List[str], run_id: 
     return result
 
 
+# ============================================================
+# 深度处理优先级：按标题与核心目标方向的相关度排序并限量
+# ============================================================
+
+# 核心 AI 应用/Agent 方向（最高优先）
+CORE_AI_KEYWORDS = [
+    "agent", "智能体", "ai应用", "大模型应用", "llm应用", "aigc应用",
+    "ai agent", "aigc", "ai开发", "ai工程师", "ai全栈", "ai平台",
+    "ai infra", "大模型应用开发", "rag", "copilot", "智能助手", "对话系统",
+    "大模型工程师", "llm工程师", "ai产品", "智能应用",
+]
+# AI / 算法（高优先）
+AI_KEYWORDS = [
+    "大模型", "llm", "人工智能", "机器学习", "深度学习", "nlp",
+    "自然语言", "多模态", "计算机视觉", "知识图谱", "算法工程师", "算法平台",
+    "ai", "生成式",
+]
+# 全栈（AI 全栈方向，中高）
+FULLSTACK_KEYWORDS = ["全栈", "前后端", "web全栈"]
+# 后端 / 服务端（中）
+BACKEND_KEYWORDS = ["后端", "服务端", "后台", "server", "java", "golang", "go"]
+# 前端 / 客户端（中低）
+FRONTEND_KEYWORDS = ["前端", "客户端", "ios", "android"]
+# 降权：偏理论研究 / 数据构建（非工程应用）
+RESEARCH_DOWN_KEYWORDS = [
+    "预训练", "数据构建", "数据集", "dataset", "课题", "benchmark", "范式研究",
+    "理论研究", "算法研究", "研究员", "科学家", "博士后", "实验室", "基础研究",
+    "数据挖掘研究", "评测研究",
+]
+# 降权：硬件 / 非软件 / 运维测试
+HARDWARE_DOWN_KEYWORDS = [
+    "硬件", "芯片", "服务器", "fpga", "asic", "板卡", "机房",
+    "运维", "测试", "qa", "sre",
+]
+# 非技术角色（即使标题带 AI 也要强降权，只投技术开发岗）
+NON_TECH_ROLE_KEYWORDS = [
+    "运营", "市场", "营销", "投放", "品牌", "公关", "销售", "商务",
+    "产品经理", "客户经理", "策划", "文案", "推广", "渠道", "招商",
+    "人力", "财务", "行政", "法务", "客服", "培训生", "管培",
+]
+# 工程开发标记（含这些词时不算纯非技术角色）
+ENGINEERING_MARKERS = ["工程师", "开发", "研发", "技术", "架构", "工程", "算法", "研究员", "科学家"]
+
+
+def _contains(t: str, kw: str) -> bool:
+    """标题包含判断；英文词按词边界匹配，避免 ai 命中 detail。t 已 lower。"""
+    kw = kw.lower()
+    if kw.isascii() and any(c.isalpha() for c in kw):
+        return re.search(r"(?<![a-z])" + re.escape(kw) + r"(?![a-z])", t) is not None
+    return kw in t
+
+
+def title_priority_score(title: str) -> int:
+    """按标题给深度处理优先级打分，越高越优先。"""
+    t = (title or "").lower()
+    score = 0
+    if any(_contains(t, k) for k in CORE_AI_KEYWORDS):
+        score += 100
+    if any(_contains(t, k) for k in AI_KEYWORDS):
+        score += 60
+    if any(_contains(t, k) for k in FULLSTACK_KEYWORDS):
+        score += 55
+    if any(_contains(t, k) for k in BACKEND_KEYWORDS):
+        score += 40
+    if any(_contains(t, k) for k in FRONTEND_KEYWORDS):
+        score += 30
+    if any(_contains(t, k) for k in RESEARCH_DOWN_KEYWORDS):
+        score -= 45
+    if any(_contains(t, k) for k in HARDWARE_DOWN_KEYWORDS):
+        score -= 50
+    if "实习" in t or _contains(t, "intern"):
+        score -= 40  # 应届找全职，实习岗明显降权（含中文"实习"与英文 intern）
+    # 纯非技术角色（标题无任何工程开发标记），即使带 AI 也强降权踢出深度列表
+    if any(_contains(t, k) for k in NON_TECH_ROLE_KEYWORDS) and not any(
+            m in t for m in ENGINEERING_MARKERS):
+        score -= 150
+    return score
+
+
+def _norm_title_for_dedup(title: str) -> str:
+    """规范化标题用于去重：仅去空白/大小写，不截断，避免误合并不同岗位。"""
+    return re.sub(r"\s+", "", (title or "").lower())
+
+
+# 青云计划/课题研究类岗位（category_path 含"青云"），以博士为主，对本科用户强降权
+QINGYUN_DOWN = 130
+
+# 海外地点（用户目标为国内城市），含这些地点的岗位降权，避免海外实习/研究岗挤占名额
+OVERSEAS_LOCATIONS = [
+    "london", "singapore", "united kingdom", "united states", "usa",
+    "hong kong", "korea", "japan", "malaysia", "海外",
+]
+
+
+def job_priority_score(job: JobPosting) -> int:
+    """标题方向分 + 青云课题降权 + 海外地点降权。"""
+    score = title_priority_score(job.title)
+    if "青云" in (job.category_path or ""):
+        score -= QINGYUN_DOWN
+    loc = (job.location or "").lower()
+    if any(w in loc for w in OVERSEAS_LOCATIONS):
+        score -= 90
+    return score
+
+
+def prioritize_jobs(jobs: List[JobPosting], max_deep: int) -> List[JobPosting]:
+    """按方向相关度降序；同标题（多城市/批次）只留最靠前一个，再取前 max_deep。
+
+    青云课题（博士导向）对本科用户强降权，确保普通 AI 开发/全栈岗优先进入深度处理。
+    """
+    ordered = sorted(jobs, key=job_priority_score, reverse=True)
+    seen_titles: set[str] = set()
+    unique: List[JobPosting] = []
+    for j in ordered:
+        key = _norm_title_for_dedup(j.title)
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        unique.append(j)
+    if max_deep and max_deep > 0:
+        return unique[:max_deep]
+    return unique
+
+
+def get_max_deep() -> int:
+    try:
+        return max(0, int(os.environ.get("JOB_AGENT_MAX_DEEP", "80")))
+    except ValueError:
+        return 80
+
+
 async def run(state: AgentState) -> AgentState:
     """LangGraph 节点：标题语义初筛（规则预过滤 + LLM 精筛）。"""
     if not state.discovered_jobs:
         state.add_error("screen_titles", "没有可筛选的岗位")
         return state
+
+    site_name = state.site_name or "unknown"
+
+    # 缓存复用：该站点已完整初筛过（无 -1 标记），直接加载通过岗位
+    if site_name != "unknown":
+        cached = await state_db.get_cached_screened(site_name)
+        if cached is not None:
+            cached_jobs = [
+                JobPosting(
+                    title=r.get("job_title") or "",
+                    company=r.get("company") or "",
+                    location=r.get("location") or "",
+                    detail_url=r["job_url"],
+                    category_path=r.get("category_path") or "",
+                    site_name=r.get("site_name") or site_name,
+                ) for r in cached]
+            max_deep = get_max_deep()
+            state.screened_jobs = prioritize_jobs(cached_jobs, max_deep)
+            logger.info("Cache: %d screened -> %d after priority (site=%s)",
+                        len(cached_jobs), len(state.screened_jobs), site_name)
+            print(f"\n[标题初筛] 缓存 {len(cached_jobs)} 个通过岗位，按方向取前 {len(state.screened_jobs)} 个进入深度匹配（--max-deep 调整）")
+            return state
 
     target_directions: List[str] = []
     if state.profile and state.profile.target_directions:
@@ -216,19 +371,29 @@ async def run(state: AgentState) -> AgentState:
     else:
         llm_filtered = 0
 
-    # 合并：规则技术类 + LLM 判定相关
-    screened = tech_jobs + related_from_llm
+    # 合并：规则技术类 + LLM 判定相关（全部初筛通过岗位）
+    screened_all = tech_jobs + related_from_llm
+
+    # 记录初筛结果到库（-1 -> 1/0），供重跑复用（标记全部，不截断）
+    if site_name != "unknown":
+        await state_db.mark_screen_results(
+            site_name,
+            [j.detail_url for j in jobs],
+            [j.detail_url for j in screened_all])
+
+    # 按目标方向相关度排序并限量，得到进入深度抓取 JD + 匹配的岗位
+    max_deep = get_max_deep()
+    screened = prioritize_jobs(screened_all, max_deep)
     state.screened_jobs = screened
 
     total_filtered = total - len(screened)
-    logger.info("初筛完成: 总%d -> 通过%d（规则过滤%d + LLM过滤%d，总计过滤%d，%.1f%%）",
-                total, len(screened), len(non_tech_jobs), llm_filtered,
-                total_filtered, total_filtered / total * 100 if total else 0)
-    print(f"\n[标题初筛] {total} -> {len(screened)}（规则排除 {len(non_tech_jobs)}，LLM排除 {llm_filtered}，共过滤 {total_filtered}）")
+    logger.info("初筛完成: 总%d -> 初筛通过%d，按方向取前%d（规则排除%d + LLM排除%d）",
+                total, len(screened_all), len(screened),
+                len(non_tech_jobs), llm_filtered)
+    print(f"\n[标题初筛] {total} -> 初筛通过 {len(screened_all)}，按方向取前 {len(screened)} 个进入深度匹配（规则排除 {len(non_tech_jobs)}，LLM排除 {llm_filtered}；--max-deep 调整数量）")
 
     # 自动保存初筛结果到 output 目录，便于断点续跑和复用
     try:
-        site_name = state.site_name or "unknown"
         os.makedirs("output", exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_path = f"output/screened_jobs_{site_name}_{ts}.json"
